@@ -69,11 +69,12 @@ The web workspace is designed around 4 working surfaces:
 - `Studio`
   Follow a ChatGPT-style message flow, timeline, logs, and control actions
 
-### Workspace Screenshots
+### Workspace Walkthrough
 
-| Home | Tutorial |
-|---|---|
-| ![Workspace Home](image/workspace_home.png) | ![Workspace Tutorial](image/workspace_tutorial.png) |
+Open the web workspace locally to inspect the live UI:
+
+- Home: `http://127.0.0.1:8080/`
+- Tutorial: `http://127.0.0.1:8080/static/tutorial.html`
 
 ### Pipeline View
 
