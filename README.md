@@ -76,6 +76,16 @@ Open the web workspace locally to inspect the live UI:
 - Home: `http://127.0.0.1:8080/`
 - Tutorial: `http://127.0.0.1:8080/static/tutorial.html`
 
+### Workspace Screenshots
+
+<p align="center">
+  <img src="image/workspace_home.png" width="100%" alt="My Own PhD Students Workspace Home">
+</p>
+
+<p align="center">
+  <img src="image/workspace_tutorial.png" width="100%" alt="My Own PhD Students Workspace Tutorial">
+</p>
+
 ### Pipeline View
 
 <p align="center">
