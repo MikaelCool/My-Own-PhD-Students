@@ -97,6 +97,9 @@ const I18N = {
     current_context: "当前上下文",
     save_settings: "保存设置",
     settings_saved: "设置已保存。",
+    test_feishu_notification: "测试飞书通知",
+    feishu_test_sent: "测试通知已发送",
+    feishu_test_failed: "测试通知发送失败",
     project_created: "项目已创建，流水线已启动。",
     pipeline_started: "流水线已启动。",
     pipeline_stopped: "流水线已停止。",
@@ -299,6 +302,9 @@ const I18N = {
     current_context: "Current context",
     save_settings: "Save settings",
     settings_saved: "Settings saved.",
+    test_feishu_notification: "Test Feishu notification",
+    feishu_test_sent: "Test notification sent",
+    feishu_test_failed: "Failed to send test notification",
     project_created: "Project created and pipeline started.",
     pipeline_started: "Pipeline started.",
     pipeline_stopped: "Pipeline stopped.",
@@ -1263,6 +1269,14 @@ function renderSettingsSection(title, body) {
   return `<section class="settings-section"><h3>${escapeHtml(title)}</h3><div class="field-grid">${body}</div></section>`;
 }
 
+function renderSettingsAction(label, id) {
+  return `
+    <div class="settings-action-row span-2">
+      <button id="${escapeHtml(id)}" class="secondary-action" type="button">${escapeHtml(label)}</button>
+    </div>
+  `;
+}
+
 function renderSettings() {
   const currentMode = String(getSetting("experiment.mode", "simulated"));
   const computeTarget =
@@ -1367,6 +1381,7 @@ function renderSettings() {
           ${renderBooleanField({ label: t("field_stage_start"), path: "notifications.on_stage_start", value: getSetting("notifications.on_stage_start", false) })}
           ${renderBooleanField({ label: t("field_stage_complete"), path: "notifications.on_stage_complete", value: getSetting("notifications.on_stage_complete", false) })}
           ${renderBooleanField({ label: t("field_stage_fail"), path: "notifications.on_stage_fail", value: getSetting("notifications.on_stage_fail", false) })}
+          ${renderSettingsAction(t("test_feishu_notification"), "test-feishu-notification")}
         `)}
       </section>
       <section class="subtab-panel ${activeSubtab("settings", "server")}">
@@ -1562,6 +1577,18 @@ async function saveSettings() {
   renderSettings();
 }
 
+async function testFeishuNotification() {
+  captureSettingsDraft();
+  const payload = await api("/api/settings/test-notification", {
+    method: "POST",
+    body: JSON.stringify({ config: state.settingsDraft }),
+  });
+  if (payload?.status !== "ok") {
+    throw new Error(t("feishu_test_failed"));
+  }
+  toast(t("feishu_test_sent"));
+}
+
 function updateContractPreview() {
   // Startup modal no longer renders a preview panel.
 }
@@ -1656,6 +1683,13 @@ function bindDynamicUi() {
     if (target.id === "save-settings") {
       saveSettings().catch((error) => {
         toast(error.message);
+        console.error(error);
+      });
+      return;
+    }
+    if (target.id === "test-feishu-notification") {
+      testFeishuNotification().catch((error) => {
+        toast(error.message || t("feishu_test_failed"));
         console.error(error);
       });
       return;
