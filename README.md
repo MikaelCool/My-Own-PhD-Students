@@ -69,11 +69,12 @@ The web workspace is designed around 4 working surfaces:
 - `Studio`
   Follow a ChatGPT-style message flow, timeline, logs, and control actions
 
-### Workspace Screenshots
+### Workspace Walkthrough
 
-| Home | Tutorial |
-|---|---|
-| ![Workspace Home](image/workspace_home.png) | ![Workspace Tutorial](image/workspace_tutorial.png) |
+Open the web workspace locally to inspect the live UI:
+
+- Home: `http://127.0.0.1:8080/`
+- Tutorial: `http://127.0.0.1:8080/static/tutorial.html`
 
 ### Pipeline View
 
@@ -120,9 +121,10 @@ Windows PowerShell:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e .
+.\.venv\Scripts\python.exe -m pip install -e .
 ```
+
+If PowerShell blocks `Activate.ps1`, you do not need activation. Use the venv Python path directly as shown above.
 
 Linux/macOS:
 
@@ -167,6 +169,20 @@ Resume the latest run:
 researchclaw run --config config.arc.yaml --resume
 ```
 
+### Launch the visual workspace with one script
+
+Git Bash / WSL / Linux / macOS:
+
+```bash
+./scripts/start_workspace.sh
+```
+
+Custom config or port:
+
+```bash
+./scripts/start_workspace.sh ./config.arc.yaml 127.0.0.1 8090
+```
+
 ### Launch the visual workspace
 
 ```powershell
@@ -178,6 +194,8 @@ Open:
 ```text
 http://127.0.0.1:8080/
 ```
+
+If you are on Windows and prefer Bash, use [scripts/start_workspace.sh](scripts/start_workspace.sh) from Git Bash.
 
 ## Cloud Server Workflow
 
