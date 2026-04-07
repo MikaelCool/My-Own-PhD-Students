@@ -24,6 +24,7 @@ from researchclaw.pipeline._domain import _detect_domain  # noqa: F401
 from researchclaw.pipeline._helpers import (
     StageResult,
     _build_context_preamble,
+    _build_startup_contract_block,
     _chat_with_prompt,
     _collect_experiment_results,  # noqa: F401
     _default_quality_report,
@@ -604,6 +605,8 @@ def _execute_peer_review(
         _overlay = (
             _get_evolution_overlay(run_dir, "peer_review")
             + "\n"
+            + _build_startup_contract_block(run_dir, stage_name="peer_review")
+            + "\n"
             + build_phase_charter("peer_review", venue_profile)
             + "\n"
             + build_stage_skill_overlay(config, stage_name="peer_review", context=_context)
@@ -747,6 +750,8 @@ def _execute_paper_revision(
         _overlay = _get_evolution_overlay(run_dir, "paper_revision")
         _overlay = (
             _overlay
+            + "\n"
+            + _build_startup_contract_block(run_dir, stage_name="paper_revision")
             + "\n"
             + build_phase_charter("paper_revision", venue_profile)
             + "\n"
@@ -1018,6 +1023,8 @@ def _execute_quality_gate(
 
         _overlay = (
             _get_evolution_overlay(run_dir, "quality_gate")
+            + "\n"
+            + _build_startup_contract_block(run_dir, stage_name="quality_gate")
             + "\n"
             + build_phase_charter("quality_gate", venue_profile)
             + "\n"

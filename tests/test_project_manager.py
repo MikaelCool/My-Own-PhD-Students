@@ -69,6 +69,20 @@ class TestProjectModel:
         p = Project.from_dict(d)
         assert p.created_at.year == 2024
 
+    def test_roundtrip_preserves_startup_contract_and_launch_mode(self) -> None:
+        p = Project(
+            name="quest-1",
+            config_path="/cfg",
+            run_dir="/runs",
+            title="Quest 1",
+            startup_contract={"goal": "test goal", "launch_mode": "review_only"},
+            launch_mode="review_only",
+        )
+        restored = Project.from_dict(p.to_dict())
+        assert restored.title == "Quest 1"
+        assert restored.launch_mode == "review_only"
+        assert restored.startup_contract["goal"] == "test goal"
+
 
 # ══════════════════════════════════════════════════════════════════
 # Idea model tests
@@ -203,6 +217,130 @@ class TestProjectManager:
         copied = Path(proj.config_path)
         assert copied.exists()
         assert "test" in copied.read_text()
+
+    def test_create_writes_startup_contract_and_project_brief(
+        self, manager: ProjectManager, config_yaml: Path
+    ) -> None:
+        startup_contract = {
+            "goal": "verify baseline and propose one direction",
+            "launch_mode": "standard_full_run",
+            "objectives": ["verify baseline", "run one direction"],
+        }
+        manager.create(
+            "contract_proj",
+            str(config_yaml),
+            topic="baseline work",
+            title="Contract Project",
+            startup_contract=startup_contract,
+        )
+        contract_path = manager.startup_contract_path("contract_proj")
+        brief_path = manager.project_brief_path("contract_proj")
+        assert contract_path.exists()
+        assert brief_path.exists()
+        assert "verify baseline" in contract_path.read_text(encoding="utf-8")
+        assert "Contract Project" in brief_path.read_text(encoding="utf-8")
+
+    def test_materialize_canvas_includes_project_and_phases(
+        self, manager: ProjectManager, config_yaml: Path
+    ) -> None:
+        manager.create(
+            "canvas_proj",
+            str(config_yaml),
+            topic="graph view",
+            startup_contract={"baseline_urls": ["https://example.com/baseline"]},
+        )
+        canvas = manager.materialize_canvas("canvas_proj")
+        labels = {node["label"] for node in canvas["nodes"]}
+        assert "Discovery Council" in labels
+        assert "Innovation Forge" in labels
+        assert "Editorial Board" in labels
+        assert any(node["type"] == "project" for node in canvas["nodes"])
+
+    def test_materialize_canvas_includes_svg_graph_entities_for_latest_run(
+        self, manager: ProjectManager, config_yaml: Path
+    ) -> None:
+        project = manager.create(
+            "graph_proj",
+            str(config_yaml),
+            topic="graph view",
+            startup_contract={
+                "goal": "tighten the paper around validated evidence",
+                "baseline_urls": ["https://example.com/baseline"],
+                "objectives": ["audit evidence", "revise claims"],
+                "launch_mode": "rebuttal_revision",
+            },
+        )
+        run_id = manager.start_run("graph_proj", run_id="rc-20260101-000000-abcd12")
+        run_root = Path(project.run_dir) / run_id
+        (run_root / "stage-15").mkdir(parents=True, exist_ok=True)
+        (run_root / "stage-18").mkdir(parents=True, exist_ok=True)
+        (run_root / "stage-19").mkdir(parents=True, exist_ok=True)
+        (run_root / "checkpoint.json").write_text(
+            json.dumps({"stage": 19, "stage_name": "PAPER_REVISION", "status": "running"}),
+            encoding="utf-8",
+        )
+        (run_root / "decision_history.json").write_text(
+            json.dumps([{"decision": "pivot", "rollback_target": 8}]),
+            encoding="utf-8",
+        )
+        (run_root / "stage-18" / "review_state.json").write_text(
+            json.dumps({"review_outcome": "revise_again", "editorial_action": "revise_paper"}),
+            encoding="utf-8",
+        )
+        (run_root / "stage-19" / "paper_revised.md").write_text("# Revised", encoding="utf-8")
+
+        canvas = manager.materialize_canvas("graph_proj")
+        node_types = {node["type"] for node in canvas["nodes"]}
+        edge_kinds = {edge["kind"] for edge in canvas["edges"]}
+
+        assert canvas["meta"]["latest_run_id"] == run_id
+        assert "run" in node_types
+        assert "stage" in node_types
+        assert "review" in node_types
+        assert "decision" in node_types
+        assert "rollback" in edge_kinds
+
+    def test_materialize_studio_exposes_messages_and_timeline(
+        self, manager: ProjectManager, config_yaml: Path
+    ) -> None:
+        project = manager.create(
+            "studio_proj",
+            str(config_yaml),
+            topic="summarize the latest evidence",
+            startup_contract={
+                "goal": "summarize the latest evidence",
+                "objectives": ["collect evidence", "prepare review"],
+                "launch_mode": "review_only",
+            },
+        )
+        run_id = manager.start_run("studio_proj", run_id="rc-20260101-000000-test01")
+        run_root = Path(project.run_dir) / run_id
+        (run_root / "stage-01").mkdir(parents=True, exist_ok=True)
+        (run_root / "stage-18").mkdir(parents=True, exist_ok=True)
+        (run_root / "checkpoint.json").write_text(
+            json.dumps(
+                {
+                    "stage": 18,
+                    "stage_name": "PEER_REVIEW",
+                    "status": "running",
+                    "start_time": "2026-01-01T00:00:00+00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_root / "pipeline.log").write_text(
+            "[stage-01] collected evidence\n[stage-18] review loop active\n",
+            encoding="utf-8",
+        )
+        manager.finish_run("studio_proj", "completed", summary="Review package is ready.")
+
+        studio = manager.materialize_studio("studio_proj")
+
+        assert studio["messages"]
+        assert any(message["role"] == "user" for message in studio["messages"])
+        assert any(message["role"] == "assistant" for message in studio["messages"])
+        assert studio["timeline"]
+        assert any(event["kind"] == "stage" for event in studio["timeline"])
 
 
 # ══════════════════════════════════════════════════════════════════

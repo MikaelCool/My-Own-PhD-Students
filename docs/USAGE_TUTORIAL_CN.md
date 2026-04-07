@@ -1,5 +1,8 @@
 # My Own PhD Students 使用教程
 
+如果你主要使用可视化工作台，请优先看：
+- [docs/WORKSPACE_TUTORIAL_CN.md](D:/codex/AutoResearchClaw/docs/WORKSPACE_TUTORIAL_CN.md)
+
 这份文档面向第一次真正跑通 `My Own PhD Students` 的用户，不讲宣传，只讲怎么在本地把流程跑起来，以及每一步应该准备什么。
 
 ## 1. 这套系统会做什么

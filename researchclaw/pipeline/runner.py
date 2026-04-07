@@ -36,6 +36,36 @@ def _should_start(stage: Stage, from_stage: Stage, started: bool) -> bool:
     return stage == from_stage
 
 
+def _load_startup_contract(run_dir: Path) -> dict[str, object]:
+    candidates = [run_dir / "startup_contract.json"]
+    if run_dir.parent.name == "artifacts":
+        candidates.append(run_dir.parent.parent / "startup_contract.json")
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
+def _resolve_launch_mode(run_dir: Path) -> str:
+    contract = _load_startup_contract(run_dir)
+    return str(contract.get("launch_mode") or "standard_full_run").strip().lower()
+
+
+def _terminal_stage_for_launch_mode(launch_mode: str) -> Stage | None:
+    mode = (launch_mode or "standard_full_run").strip().lower()
+    if mode == "review_only":
+        return Stage.PEER_REVIEW
+    if mode == "rebuttal_revision":
+        return Stage.QUALITY_GATE
+    return None
+
+
 def _build_pipeline_summary(
     *,
     run_id: str,
@@ -43,8 +73,10 @@ def _build_pipeline_summary(
     from_stage: Stage,
     run_dir: Path | None = None,
 ) -> dict[str, object]:
+    launch_mode = _resolve_launch_mode(run_dir) if run_dir is not None else "standard_full_run"
     summary: dict[str, object] = {
         "run_id": run_id,
+        "launch_mode": launch_mode,
         "stages_executed": len(results),
         "stages_done": sum(1 for item in results if item.status == StageStatus.DONE),
         "stages_blocked": sum(
@@ -73,6 +105,9 @@ def _write_pipeline_summary(run_dir: Path, summary: dict[str, object]) -> None:
 def _write_checkpoint(run_dir: Path, stage: Stage, run_id: str) -> None:
     """Write checkpoint atomically via temp file + rename to prevent corruption."""
     checkpoint = {
+        "stage": int(stage),
+        "stage_name": stage.name,
+        "status": "running",
         "last_completed_stage": int(stage),
         "last_completed_name": stage.name,
         "run_id": run_id,
@@ -421,6 +456,8 @@ def execute_pipeline(
     results: list[StageResult] = []
     started = False
     total_stages = len(STAGE_SEQUENCE)
+    launch_mode = _resolve_launch_mode(run_dir)
+    terminal_stage = _terminal_stage_for_launch_mode(launch_mode)
 
     for stage in STAGE_SEQUENCE:
         started = _should_start(stage, from_stage, started)
@@ -652,6 +689,12 @@ def execute_pipeline(
             else:
                 break
         if result.status == StageStatus.BLOCKED_APPROVAL and stop_on_gate:
+            break
+        if terminal_stage is not None and stage == terminal_stage:
+            print(
+                f"[{run_id}] Launch mode {launch_mode} reached terminal stage "
+                f"{terminal_stage.name} -> stopping run"
+            )
             break
 
     summary = _build_pipeline_summary(

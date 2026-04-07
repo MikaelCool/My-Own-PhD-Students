@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Own PhD Students</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">MP</div>
+        <div>
+          <div class="brand-name">My Own PhD Students</div>
+          <div class="brand-subtitle" data-i18n="brand_subtitle">Research workspace</div>
+        </div>
+      </div>
+
+      <button id="open-start-modal" class="primary-action" data-i18n="start_research">Start Research</button>
+      <a class="secondary-action sidebar-link" href="/static/tutorial.html" target="_blank" rel="noreferrer" data-i18n="usage_tutorial">Usage Tutorial</a>
+
+      <div class="sidebar-section">
+        <div class="sidebar-header">
+          <span data-i18n="projects">Projects</span>
+          <button id="refresh-projects" class="ghost-button" data-i18n="refresh">Refresh</button>
+        </div>
+        <div id="project-list" class="project-list"></div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-header">
+          <span data-i18n="workspace">Workspace</span>
+        </div>
+        <div class="workspace-hints">
+          <div data-i18n="hint_details_first">Start from Details to inspect the latest run.</div>
+          <div data-i18n="hint_canvas_structure">Use Canvas to read stage and artifact structure.</div>
+          <div data-i18n="hint_studio_control">Use Studio to control the run and review events.</div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow" id="product-eyebrow" data-i18n="product_eyebrow">ResearchClaw rigor + product workspace</div>
+          <h1 id="workspace-title">My Own PhD Students</h1>
+        </div>
+        <div class="topbar-actions">
+          <button id="open-settings" class="secondary-action" data-i18n="settings">Settings</button>
+          <button id="start-run" class="secondary-action" data-i18n="run">Run</button>
+          <button id="stop-run" class="danger-action" data-i18n="stop">Stop</button>
+        </div>
+      </header>
+
+      <section id="empty-state" class="hero-panel">
+        <div class="hero-copy">
+          <div class="eyebrow" data-i18n="product_layer">Product Layer</div>
+          <h2 data-i18n="hero_title">Start Research -> Details -> Canvas -> Studio</h2>
+          <p data-i18n="hero_body">
+            Keep the rigorous 23-stage pipeline, but surface it as a usable project workspace with startup contracts,
+            histories, graph views, and collaborative controls.
+          </p>
+        </div>
+        <div class="hero-grid">
+          <div class="hero-card">
+            <div class="hero-label" data-i18n="start_research">Start Research</div>
+            <p data-i18n="hero_card_start">Define the project contract, baselines, references, launch mode, and constraints.</p>
+          </div>
+          <div class="hero-card">
+            <div class="hero-label" data-i18n="details">Details</div>
+            <p data-i18n="hero_card_details">Review status, latest run, key artifacts, objectives, and metrics first.</p>
+          </div>
+          <div class="hero-card">
+            <div class="hero-label">Canvas</div>
+            <p data-i18n="hero_card_canvas">Read the research relationship graph instead of digging through flat logs.</p>
+          </div>
+          <div class="hero-card">
+            <div class="hero-label">Studio</div>
+            <p data-i18n="hero_card_studio">Follow the message flow, timeline, and controls from a single surface.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="workspace" class="workspace hidden">
+        <div class="summary-strip" id="summary-strip"></div>
+
+        <nav class="tabbar">
+          <button class="tab active" data-tab="details" data-i18n="details">Details</button>
+          <button class="tab" data-tab="canvas">Canvas</button>
+          <button class="tab" data-tab="studio">Studio</button>
+          <button class="tab" data-tab="files" data-i18n="files">Files</button>
+        </nav>
+
+        <section id="tab-details" class="tab-panel active"></section>
+        <section id="tab-canvas" class="tab-panel"></section>
+        <section id="tab-studio" class="tab-panel"></section>
+        <section id="tab-files" class="tab-panel"></section>
+      </section>
+    </main>
+  </div>
+
+  <div id="start-modal" class="modal hidden">
+    <div class="modal-card wide">
+      <div class="modal-header">
+        <div>
+          <div class="eyebrow" data-i18n="start_research">Start Research</div>
+          <h2 data-i18n="start_modal_title">Create project and startup contract</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-modal="start-modal">×</button>
+      </div>
+      <div class="modal-body">
+        <form id="start-form" class="start-sheet">
+          <nav class="subtabbar start-subtabbar">
+            <button class="subtab active" type="button" data-subtab-group="start" data-subtab-panel="basics" data-i18n="start_tab_basics">Basic</button>
+            <button class="subtab" type="button" data-subtab-group="start" data-subtab-panel="strategy" data-i18n="start_tab_strategy">Strategy</button>
+            <button class="subtab" type="button" data-subtab-group="start" data-subtab-panel="inputs" data-i18n="start_tab_inputs">Inputs</button>
+          </nav>
+
+          <section class="subtab-panel active" data-start-panel="basics">
+            <div class="field-grid">
+              <label class="field">
+                <span data-i18n="project_id">Project ID</span>
+                <input name="project_id" required placeholder="vision-robustness" />
+              </label>
+              <label class="field">
+                <span data-i18n="project_title">Project title</span>
+                <input name="title" required data-i18n-placeholder="project_title_placeholder" placeholder="Research on robustness under distribution shift" />
+              </label>
+              <label class="field span-2">
+                <span data-i18n="primary_request">Primary request</span>
+                <textarea name="topic" rows="5" data-i18n-placeholder="primary_request_placeholder" placeholder="Describe the research question, success criteria, and evidence standard."></textarea>
+              </label>
+            </div>
+          </section>
+
+          <section class="subtab-panel" data-start-panel="strategy">
+            <div class="field-grid">
+              <label class="field">
+                <span data-i18n="research_intensity">Research intensity</span>
+                <select name="research_intensity">
+                  <option value="balanced" data-i18n="balanced">Balanced</option>
+                  <option value="light" data-i18n="light">Light</option>
+                  <option value="sprint" data-i18n="sprint">Sprint</option>
+                </select>
+              </label>
+              <label class="field">
+                <span data-i18n="decision_policy">Decision policy</span>
+                <select name="decision_policy">
+                  <option value="autonomous" data-i18n="autonomous">Autonomous</option>
+                  <option value="user_gated" data-i18n="user_gated">User gated</option>
+                </select>
+              </label>
+              <label class="field">
+                <span data-i18n="launch_mode">Launch mode</span>
+                <select name="launch_mode">
+                  <option value="standard_full_run" data-i18n="launch_standard">Standard full run</option>
+                  <option value="continue_existing_state" data-i18n="launch_continue">Continue existing state</option>
+                  <option value="review_only" data-i18n="launch_review">Review only</option>
+                  <option value="rebuttal_revision" data-i18n="launch_rebuttal">Rebuttal / revision</option>
+                </select>
+              </label>
+              <label class="field">
+                <span data-i18n="auto_approve">Auto approve gate</span>
+                <select name="auto_approve">
+                  <option value="true" data-i18n="yes">Yes</option>
+                  <option value="false" data-i18n="no">No</option>
+                </select>
+              </label>
+              <label class="field span-2">
+                <span data-i18n="objectives">Objectives</span>
+                <textarea name="objectives" rows="5" data-i18n-placeholder="objectives_placeholder" placeholder="One objective per line."></textarea>
+              </label>
+            </div>
+          </section>
+
+          <section class="subtab-panel" data-start-panel="inputs">
+            <div class="field-grid">
+              <label class="field span-2">
+                <span data-i18n="baseline_links">Baseline links</span>
+                <textarea name="baseline_urls" rows="4" data-i18n-placeholder="multiline_placeholder" placeholder="One URL or path per line."></textarea>
+              </label>
+              <label class="field span-2">
+                <span data-i18n="reference_links">References / repos</span>
+                <textarea name="paper_urls" rows="4" data-i18n-placeholder="multiline_placeholder" placeholder="One URL or path per line."></textarea>
+              </label>
+              <label class="field span-2">
+                <span data-i18n="runtime_constraints">Runtime constraints</span>
+                <textarea name="runtime_constraints" rows="4" data-i18n-placeholder="runtime_constraints_placeholder" placeholder="Hardware, model, budget, and validation rules."></textarea>
+              </label>
+            </div>
+          </section>
+
+          <div class="form-actions">
+            <button type="submit" class="primary-action" data-i18n="create_project">Create project</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-card wide settings-sheet">
+      <div class="modal-header">
+        <div>
+          <div class="eyebrow" data-i18n="settings">Settings</div>
+          <h2 data-i18n="settings_title">Workspace settings</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-modal="settings-modal">×</button>
+      </div>
+      <div id="settings-content" class="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

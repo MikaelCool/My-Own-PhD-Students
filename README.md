@@ -2,90 +2,119 @@
   <img src="image/logo.png" width="700" alt="My Own PhD Students Logo">
 </p>
 
-<h2 align="center"><b>My Own PhD Students</b></h2>
-<p align="center"><b>Your private autonomous research workbench.</b></p>
+<h1 align="center">My Own PhD Students</h1>
+<p align="center"><b>An autonomous research workbench for topic framing, experimentation, paper writing, review, and revision</b></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
   <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/CLI-researchclaw-181717" alt="CLI">
+  <img src="https://img.shields.io/badge/Web-Workspace-0f766e" alt="Web Workspace">
+  <img src="https://img.shields.io/badge/Research-23--Stage%20Pipeline-111827" alt="23 Stage Pipeline">
 </p>
 
-<p align="center">
-  <img src="image/framework_v2.png" width="100%" alt="My Own PhD Students Framework">
-</p>
+## Overview
 
-My Own PhD Students is the public-facing name of this autonomous research pipeline. It takes a topic or baseline brief and runs through literature intake, hypothesis generation, experiment planning, code generation, execution, analysis, writing, review, and final export.
+My Own PhD Students is the product-facing layer on top of the `ResearchClaw` pipeline.
 
-The current version is oriented toward practical research iteration rather than demo-only paper generation:
+It turns a strict 23-stage autonomous research engine into a usable project workspace:
 
-- Venue-aware review loops for targets such as `CCF-A`
-- Innovation-to-evidence constraints through a `claims_evidence_matrix`
-- Experiment refinement when claims are unsupported or evidence is weak
-- Priority literature intake from `Zotero -> Obsidian -> local seed`
-- Markdown-first writing with final export to conference-style `LaTeX`
-- Reusable learned skills and multi-phase handoff artifacts
+- start a topic with a structured `startup_contract`
+- run full research cycles or revision-only cycles
+- inspect progress through `Details`, `Canvas`, `Studio`, and `Files`
+- track claims against evidence instead of generating paper text blindly
+- route heavy experiments to a cloud server when local compute is not enough
 
-## Automation Flow
+This project is built for practical iteration, not demo-only paper generation.
 
-The pipeline is easiest to understand as 3 connected phases:
+## What It Does
 
-1. `Read & Frame`
-   - ingest literature from `Zotero -> Obsidian -> local seed`
-   - decompose the problem
-   - synthesize gaps and generate hypotheses
-2. `Build & Test`
-   - design experiments against baselines
-   - generate and run code
-   - refine when evidence is weak or results are unstable
-3. `Write & Defend`
-   - draft the paper
-   - review it under a venue-aware rubric
-   - revise, export, and verify citations
+At a high level, the system can:
 
-The key point is that the phases are not one-way. Weak novelty can route the run back to hypothesis generation, missing evidence can route it back to experiment design, and low review scores can route it back into revision or more experiments.
+- ingest literature from `Zotero -> Obsidian -> local seed files`
+- frame a problem and generate testable research directions
+- design experiments and generate execution artifacts
+- run experiment-analysis-review loops with rollback and refinement
+- draft papers, revise them, and export conference-style deliverables
+- expose the whole process in a visual workspace instead of flat logs
 
 ## Why It Is Different
 
-This project is built around a stricter research loop than a normal "paper generator":
+Most AI research generators optimize for text output. This project optimizes for research process quality.
 
-- novelty must be tied to evidence through `claims_evidence_matrix.md`
-- experiments are compared against baselines instead of judged in isolation
-- review is venue-aware instead of generic
-- writing is constrained by prior artifacts rather than free-form text generation
-- lessons and reusable skills are archived for later runs
+Core advantages:
 
-## Why This Repo Exists
+- `Claims-Evidence discipline`
+  Novelty is expected to map to evidence through `claims_evidence_matrix.md`
+- `Venue-aware review`
+  Review loops target concrete quality bars such as `CCF-A`
+- `Revision-first operation`
+  The pipeline supports `standard_full_run`, `continue_existing_state`, `review_only`, and `rebuttal_revision`
+- `Project workspace model`
+  Research is organized as persistent projects with multiple runs, not one-off scripts
+- `Visual workbench`
+  Users can inspect graph structure, messages, timeline, settings, and artifacts from the browser
+- `Cloud execution path`
+  Experiments can move from local execution to `SSH` cloud servers when local GPU or RAM is insufficient
 
-Most "AI paper generation" projects stop at drafting text. This repo is trying to close the harder loop:
+## Workspace
 
-- collect and filter literature
-- generate claims that can actually be tested
-- design and run experiments against baselines
-- audit whether results support the claimed novelty
-- rewrite based on review feedback
-- export a deliverable paper package
+The web workspace is designed around 4 working surfaces:
 
-If the results do not beat or justify the baseline, the pipeline is expected to revise claims or rework the experiment path instead of pretending the contribution is valid.
+- `Start Research`
+  Create a project and fill a structured startup contract
+- `Details`
+  Inspect current status, latest run, key artifacts, metrics, and contract goals
+- `Canvas`
+  Explore stages, artifacts, decisions, and rollback paths through a graph
+- `Studio`
+  Follow a ChatGPT-style message flow, timeline, logs, and control actions
 
-## What You Get
+### Workspace Screenshots
 
-A successful run typically produces:
+| Home | Tutorial |
+|---|---|
+| ![Workspace Home](image/workspace_home.png) | ![Workspace Tutorial](image/workspace_tutorial.png) |
 
-- `paper_draft.md`: the main manuscript draft
-- `paper.tex`: exported LaTeX paper
-- `references.bib`: bibliography for cited works
-- `deliverables/`: final export bundle
-- `stage-09/claims_evidence_matrix.md`: innovation-to-evidence mapping
-- `stage-18/review_state.json`: review loop state
-- `stage-18/paper_score.json`: score breakdown and target tracking
-- `stage-21/learned_skills_summary.md`: run-level learning summary
+### Pipeline View
 
-Important detail: the writing stages are Markdown-first, and LaTeX is generated at the export stage.
+<p align="center">
+  <img src="image/framework_v2.png" width="100%" alt="Pipeline Framework">
+</p>
 
-## Quick Start
+## Feature Summary
 
-### 1. Install
+### Research engine
+
+- 23-stage pipeline with rollback-aware execution
+- startup contracts and per-project run history
+- evidence-aware analysis and review loops
+- markdown-first writing and export to LaTeX deliverables
+
+### Product layer
+
+- browser workspace with project list and multi-run context
+- structured settings form in Chinese and English
+- visual canvas with right-side node details
+- tutorial page with synchronized language switching
+
+### Execution modes
+
+- local machine
+- local Docker
+- `SSH` remote cloud server
+- resume and revision-oriented launch modes
+
+## Setup
+
+### 1. Requirements
+
+- Python `3.11+`
+- a virtual environment such as `.venv`
+- optional: Docker for isolated execution
+- optional: Node.js if you use external coding agents
+- optional: cloud Linux server with `SSH` access for heavy experiments
+
+### 2. Install
 
 Windows PowerShell:
 
@@ -103,7 +132,7 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-### 2. Initialize
+### 3. Initialize configuration
 
 ```powershell
 researchclaw setup
@@ -112,7 +141,21 @@ researchclaw doctor --config config.arc.yaml
 researchclaw validate --config config.arc.yaml
 ```
 
-### 3. Run
+### 4. Minimum configuration focus
+
+Before the first real run, check these fields in `config.arc.yaml`:
+
+- `research.topic`
+- `research.baseline_brief`
+- `knowledge_base.obsidian_vault`
+- `experiment.mode`
+- `experiment.sandbox.python_path`
+- `experiment.ssh_remote.*` if you use a cloud server
+- `quality_assessor.target_venue`
+
+## Quick Start
+
+### CLI run
 
 ```powershell
 researchclaw run --config config.arc.yaml --topic "Your research idea" --auto-approve
@@ -124,101 +167,72 @@ Resume the latest run:
 researchclaw run --config config.arc.yaml --resume
 ```
 
-## Stage Notifications
+### Launch the visual workspace
 
-The repo now supports local stage notifications to `Feishu/Lark` and `WeCom`.
-
-Each completed stage can push a compact report that includes:
-
-- what the stage completed
-- what innovation it introduced or strengthened
-- what practical advantages it created for the next stages
-
-What you need:
-
-- For `Feishu/Lark`: bot webhook URL, and optionally the signing secret if your bot requires it
-- For `WeCom`: group robot webhook URL
-
-Minimal config example:
-
-```yaml
-notifications:
-  channel: "lark"        # or "wecom"
-  target: "https://open.feishu.cn/open-apis/bot/v2/hook/..."
-  secret: ""             # optional for signed Feishu/Lark bots
-  on_stage_start: true
-  on_stage_complete: true
-  on_stage_fail: true
-  on_gate_required: true
+```powershell
+.\.venv\Scripts\python.exe -m researchclaw.cli serve --config .\config.arc.yaml --host 127.0.0.1 --port 8080
 ```
 
-If you prefer to keep the current run local until the webhook is ready, leave `target` empty and the pipeline will skip network notifications.
+Open:
 
-## Recommended Configuration Focus
+```text
+http://127.0.0.1:8080/
+```
 
-Before your first serious run, check these fields in `config.arc.yaml`:
+## Cloud Server Workflow
 
-- `research.topic`
-- `research.baseline_brief`
-- `research.zotero_library_path`
-- `knowledge_base.obsidian_vault`
-- `experiment.mode`
-- `experiment.sandbox.python_path`
-- `quality_assessor.target_venue`
-- `prompts.custom_file`
+If local compute is not enough, switch to cloud execution in the workspace:
 
-If you are driving the system from an existing baseline paper rather than a vague topic, start by filling out [`baseline_briefing.md`](baseline_briefing.md).
+`Settings -> 运行 / Runtime -> 云服务器运行 / Cloud execution`
 
-## Literature Intake
+Recommended fields:
 
-The repo now prioritizes curated knowledge sources in this order:
+- `运行位置 / Execution target`: `SSH cloud server`
+- `云服务器地址 / Cloud host`: public IP or domain
+- `登录用户 / Login user`: often `ubuntu`
+- `SSH 端口 / SSH port`: usually `22`
+- `SSH 密钥路径 / SSH key path`: your local private key path
+- `远程工作目录 / Remote work directory`: for example `/tmp/researchclaw_experiments`
+- `远程 Python / Remote Python`: for example `python3`
 
-1. `Zotero`
-2. `Obsidian`
-3. local paper or note seed files
+## Typical Outputs
 
-That means your best results usually come from wiring in your real literature library and your actual notes instead of relying only on a loose local seed folder.
+A successful run usually produces:
 
-## Pipeline Structure
-
-The implementation is organized as a 23-stage pipeline, but operationally it is easier to think of it as 3 macro phases:
-
-1. Research framing
-2. Experiment and evidence building
-3. Writing, review, and publication packaging
-
-Each phase writes handoff artifacts so later stages can inspect decisions instead of blindly continuing.
-
-## Integrations
-
-Optional integrations already in the repo:
-
-- `Zotero` for literature library ingest
-- `Obsidian` for note vault ingest
-- `OpenClaw` for external orchestration
-- `MetaClaw` for lesson-to-skill carryover across runs
-
-These are optional. The core CLI flow works without them if your local config is valid.
+- `paper_draft.md`
+- `paper.tex`
+- `references.bib`
+- `deliverables/`
+- `stage-09/claims_evidence_matrix.md`
+- `stage-18/review_state.json`
+- `stage-18/paper_score.json`
 
 ## Documentation
 
-Start here if you want usage docs instead of source browsing:
+Chinese documentation:
 
-- [README_USAGE_CN.md](README_USAGE_CN.md): short Chinese usage README
-- [docs/USAGE_TUTORIAL_CN.md](docs/USAGE_TUTORIAL_CN.md): detailed Chinese tutorial
-- [docs/AUTOMATION_PROCESS_CN.md](docs/AUTOMATION_PROCESS_CN.md): process overview
-- [docs/BASELINE_WORKFLOW_CN.md](docs/BASELINE_WORKFLOW_CN.md): baseline-driven workflow
+- [README_USAGE_CN.md](README_USAGE_CN.md)
+- [docs/USAGE_TUTORIAL_CN.md](docs/USAGE_TUTORIAL_CN.md)
+- [docs/WORKSPACE_TUTORIAL_CN.md](docs/WORKSPACE_TUTORIAL_CN.md)
+- [docs/AUTOMATION_PROCESS_CN.md](docs/AUTOMATION_PROCESS_CN.md)
+- [docs/BASELINE_WORKFLOW_CN.md](docs/BASELINE_WORKFLOW_CN.md)
 
 ## Repository Layout
 
-Key paths:
-
-- `researchclaw/`: main package
-- `researchclaw/pipeline/`: stage orchestration and execution
-- `researchclaw/assessor/`: scoring, venue profiles, quality logic
-- `researchclaw/skills/`: reusable workflow skills
-- `docs/`: user-facing documentation
-- `tests/`: regression and integration tests
+- `researchclaw/`
+  Main Python package
+- `researchclaw/pipeline/`
+  Stage orchestration and execution logic
+- `researchclaw/project/`
+  Project workspace model and materialized views
+- `researchclaw/server/`
+  FastAPI app and web routes
+- `frontend/`
+  Visual workspace and tutorial page
+- `docs/`
+  Documentation and guides
+- `tests/`
+  Regression and integration tests
 
 ## Development
 
@@ -230,7 +244,7 @@ researchclaw validate --config config.arc.yaml
 pytest -q
 ```
 
-If you are contributing to the pipeline, inspect stage outputs under `artifacts/rc-*/` rather than judging a run only by whether a paper file exists.
+If you are debugging the pipeline, inspect artifacts under `artifacts/rc-*/` instead of judging success only by whether a paper file exists.
 
 ## License
 

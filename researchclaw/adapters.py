@@ -136,10 +136,12 @@ class WebhookMessageAdapter:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_sec) as response:
                 status = getattr(response, "status", 200)
+                response_text = response.read().decode("utf-8", errors="replace")
                 if status >= 400:
                     raise RuntimeError(
                         f"webhook notify failed with status {status} for {normalized}"
                     )
+                self._validate_response(normalized, response_text)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(
@@ -174,7 +176,6 @@ class WebhookMessageAdapter:
                 timestamp = str(int(time.time()))
                 sign_base = f"{timestamp}\n{self.secret}".encode("utf-8")
                 digest = hmac.new(
-                    self.secret.encode("utf-8"),
                     sign_base,
                     digestmod=hashlib.sha256,
                 ).digest()
@@ -190,6 +191,25 @@ class WebhookMessageAdapter:
             "Unsupported notification channel for local webhook adapter: "
             f"{channel!r}. Use one of: lark, feishu, wecom, wechat_work."
         )
+
+    @staticmethod
+    def _validate_response(channel: str, response_text: str) -> None:
+        try:
+            data = json.loads(response_text)
+        except json.JSONDecodeError:
+            return
+        if channel == "lark":
+            code = data.get("code", data.get("StatusCode", 0))
+            if code not in (0, "0", None):
+                msg = data.get("msg") or data.get("StatusMessage") or "unknown error"
+                raise RuntimeError(f"lark webhook rejected message: code={code}, msg={msg}")
+        elif channel == "wecom":
+            errcode = data.get("errcode", 0)
+            if errcode not in (0, "0", None):
+                errmsg = data.get("errmsg", "unknown error")
+                raise RuntimeError(
+                    f"wecom webhook rejected message: errcode={errcode}, errmsg={errmsg}"
+                )
 
 
 @dataclass

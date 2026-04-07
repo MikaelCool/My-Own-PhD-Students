@@ -17,6 +17,7 @@ from researchclaw.pipeline._domain import _detect_domain
 from researchclaw.pipeline._helpers import (
     StageResult,
     _build_context_preamble,
+    _build_startup_contract_block,
     _chat_with_prompt,
     _extract_hypothesis_claims,
     _extract_yaml_block,
@@ -232,6 +233,8 @@ def _execute_experiment_design(
 
         _overlay = (
             _get_evolution_overlay(run_dir, "experiment_design")
+            + "\n"
+            + _build_startup_contract_block(run_dir, stage_name="experiment_design")
             + "\n"
             + build_phase_charter("experiment_design")
             + "\n"

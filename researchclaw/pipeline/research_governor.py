@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from researchclaw.assessor.venue_profiles import VenueProfile, get_venue_profile
 from researchclaw.config import RCConfig
@@ -28,6 +29,13 @@ _INNOVATION_STAGES = {
     "result_analysis",
     "research_decision",
 }
+_WRITING_STAGES = {
+    "paper_outline",
+    "paper_draft",
+    "peer_review",
+    "paper_revision",
+    "quality_gate",
+}
 
 
 def build_phase_charter(stage_name: str, venue_profile: VenueProfile | None = None) -> str:
@@ -52,6 +60,97 @@ def build_phase_charter(stage_name: str, venue_profile: VenueProfile | None = No
         "- Responsibility: judge the paper as if publication slots are scarce and standards are high.\n"
         "- Constraint: require innovation, evidence, and writing quality to jointly clear the bar; weak novelty or weak experiments should trigger rollback.\n"
     )
+
+
+def build_launch_mode_overlay(
+    stage_name: str,
+    *,
+    launch_mode: str,
+    startup_contract: dict[str, Any] | None = None,
+) -> str:
+    mode = (launch_mode or "standard_full_run").strip().lower()
+    contract = startup_contract or {}
+    lines = [
+        "## Startup Contract",
+        f"- Launch mode: `{mode}`",
+    ]
+
+    goal = str(contract.get("goal") or "").strip()
+    if goal:
+        lines.append(f"- Goal: {goal[:280]}")
+
+    objectives = [str(item).strip() for item in contract.get("objectives", []) if str(item).strip()]
+    if objectives:
+        lines.append("- Objectives:")
+        lines.extend(f"  - {item}" for item in objectives[:4])
+
+    baselines = [str(item).strip() for item in contract.get("baseline_urls", []) if str(item).strip()]
+    if baselines:
+        lines.append(f"- Baseline anchors: {', '.join(baselines[:3])}")
+
+    paper_urls = [str(item).strip() for item in contract.get("paper_urls", []) if str(item).strip()]
+    if paper_urls:
+        lines.append(f"- Reference anchors: {', '.join(paper_urls[:3])}")
+
+    runtime_constraints = str(contract.get("runtime_constraints") or "").strip()
+    if runtime_constraints:
+        lines.append(f"- Runtime constraints: {runtime_constraints[:280]}")
+
+    intensity = str(contract.get("research_intensity") or "balanced").strip()
+    decision_policy = str(contract.get("decision_policy") or "autonomous").strip()
+    lines.append(f"- Research intensity: `{intensity}`")
+    lines.append(f"- Decision policy: `{decision_policy}`")
+    lines.extend(["", "## Launch Mode Strategy"])
+
+    if mode == "continue_existing_state":
+        lines.extend(
+            [
+                "- Treat prior artifacts as primary context, not disposable drafts.",
+                "- Audit what is already validated before proposing new work.",
+                "- Reuse prior baselines, charts, and review findings unless they are stale, contradictory, or missing.",
+                "- Prefer the smallest delta that restores rigor or moves the project forward.",
+            ]
+        )
+        if stage_name in _DISCOVERY_STAGES:
+            lines.append("- Discovery stages should narrow open gaps in existing artifacts instead of redoing broad exploration.")
+        elif stage_name in _INNOVATION_STAGES:
+            lines.append("- Experiment stages should patch missing evidence and fairness gaps before inventing new variants.")
+        elif stage_name in _WRITING_STAGES:
+            lines.append("- Writing and review stages should preserve validated claims and rewrite only where evidence changed.")
+    elif mode == "review_only":
+        lines.extend(
+            [
+                "- Operate in editorial audit mode.",
+                "- Prioritize skeptical evaluation, claim-evidence checking, and issue triage over generation.",
+                "- Do not request new experiments unless a contradiction or fatal evidence gap makes audit impossible.",
+                "- Produce reviewer-ready findings, scorecards, and rollback recommendations.",
+            ]
+        )
+        if stage_name in _WRITING_STAGES:
+            lines.append("- Keep recommendations concrete and evidence-linked; optimize for peer review, not narrative expansion.")
+    elif mode == "rebuttal_revision":
+        lines.extend(
+            [
+                "- Treat reviewer findings and the current manuscript as the active contract.",
+                "- Focus on rebuttal-grade deltas: claim calibration, missing evidence, and targeted prose revision.",
+                "- Preserve the existing problem framing unless evidence clearly invalidates it.",
+                "- Prefer narrow supplemental work over full-project re-scoping.",
+            ]
+        )
+        if stage_name in _INNOVATION_STAGES:
+            lines.append("- Any new experiment must directly answer a reviewer objection or close a decisive evidence gap.")
+        elif stage_name in _WRITING_STAGES:
+            lines.append("- Revisions should read like a disciplined response to review, not a brand-new paper story.")
+    else:
+        lines.extend(
+            [
+                "- Run the full research cycle end-to-end.",
+                "- Preserve baseline awareness and keep claims proportional to evidence.",
+                "- Favor publishable, reproducible outputs over novelty theater.",
+            ]
+        )
+
+    return "\n".join(lines) + "\n"
 
 
 def build_stage_skill_overlay(
@@ -132,4 +231,3 @@ def infer_editorial_action(
     if any(marker in lowered for marker in experiment_markers):
         return "supplement_experiments", "Review highlights missing empirical support or unfair baseline evaluation."
     return "revise_paper", "Primary issues are editorial and can be addressed in paper revision."
-

@@ -18,6 +18,7 @@ from researchclaw.pipeline._domain import _detect_domain, _is_ml_domain
 from researchclaw.pipeline._helpers import (
     StageResult,
     _build_context_preamble,
+    _build_startup_contract_block,
     _chat_with_prompt,
     _collect_experiment_results,
     _default_paper_outline,
@@ -86,7 +87,14 @@ def _execute_paper_outline(
             _asg = _pm.block("academic_style_guide")
         except (KeyError, Exception):
             _asg = ""
-        _overlay = _get_evolution_overlay(run_dir, "paper_outline")
+        _overlay = "\n".join(
+            part
+            for part in (
+                _get_evolution_overlay(run_dir, "paper_outline"),
+                _build_startup_contract_block(run_dir, stage_name="paper_outline"),
+            )
+            if part
+        )
         sp = _pm.for_stage(
             "paper_outline",
             evolution_overlay=_overlay,
@@ -340,7 +348,14 @@ def _write_paper_sections(
     except (KeyError, Exception):  # noqa: BLE001
         _writing_structure = ""
 
-    _overlay = _get_evolution_overlay(run_dir, "paper_draft")
+    _overlay = "\n".join(
+        part
+        for part in (
+            _get_evolution_overlay(run_dir, "paper_draft"),
+            _build_startup_contract_block(run_dir, stage_name="paper_draft"),
+        )
+        if part
+    )
     system = pm.for_stage(
         "paper_draft",
         evolution_overlay=_overlay,

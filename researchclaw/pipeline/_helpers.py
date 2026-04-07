@@ -16,6 +16,7 @@ import yaml
 from researchclaw.config import RCConfig
 from researchclaw.hardware import HardwareProfile, is_metric_name
 from researchclaw.llm.client import LLMClient
+from researchclaw.pipeline.research_governor import build_launch_mode_overlay
 from researchclaw.pipeline.stages import (
     NEXT_STAGE,
     Stage,
@@ -1030,6 +1031,9 @@ def _build_context_preamble(
         f"**Topic**: {config.research.topic}",
         f"**Domains**: {', '.join(config.research.domains) if config.research.domains else 'general'}",
     ]
+    contract_block = _build_startup_contract_block(run_dir)
+    if contract_block:
+        parts.append(contract_block)
     if include_goal:
         goal = _read_prior_artifact(run_dir, "goal.md")
         if goal:
@@ -1105,6 +1109,38 @@ def _build_context_preamble(
     if brief_text:
         parts.append(f"\n### Baseline Briefing\n{brief_text}")
     return "\n".join(parts)
+
+
+def _load_startup_contract(run_dir: Path) -> dict[str, Any]:
+    candidates = [run_dir / "startup_contract.json"]
+    if run_dir.parent.name == "artifacts":
+        candidates.append(run_dir.parent.parent / "startup_contract.json")
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
+def _build_startup_contract_block(run_dir: Path, *, stage_name: str = "context") -> str:
+    startup_contract = _load_startup_contract(run_dir)
+    launch_mode = str(
+        startup_contract.get("launch_mode")
+        or startup_contract.get("mode")
+        or "standard_full_run"
+    ).strip().lower()
+    if not startup_contract and launch_mode == "standard_full_run":
+        return ""
+    return build_launch_mode_overlay(
+        stage_name,
+        launch_mode=launch_mode,
+        startup_contract=startup_contract,
+    ).rstrip()
 
 
 # ---------------------------------------------------------------------------

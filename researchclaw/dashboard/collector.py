@@ -88,8 +88,12 @@ class DashboardCollector:
             try:
                 with ckpt_path.open() as f:
                     ckpt = json.load(f)
-                snap.current_stage = ckpt.get("stage", 0)
-                snap.current_stage_name = ckpt.get("stage_name", "")
+                snap.current_stage = int(
+                    ckpt.get("stage", ckpt.get("last_completed_stage", 0)) or 0
+                )
+                snap.current_stage_name = str(
+                    ckpt.get("stage_name", ckpt.get("last_completed_name", ""))
+                )
                 snap.status = ckpt.get("status", "running")
                 snap.topic = ckpt.get("topic", "")
                 snap.start_time = ckpt.get("start_time", "")
@@ -130,6 +134,14 @@ class DashboardCollector:
             try:
                 lines = log_path.read_text(errors="replace").splitlines()
                 snap.last_log_lines = lines[-self._max_log_lines:]
+            except Exception:
+                pass
+
+        summary_path = run_dir / "pipeline_summary.json"
+        if summary_path.exists() and not snap.is_active:
+            try:
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                snap.status = str(summary.get("final_status", snap.status))
             except Exception:
                 pass
 

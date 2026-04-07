@@ -335,6 +335,25 @@ def test_build_context_preamble_includes_anchor_claims_and_matrix(
     assert "claim gate content" in text
 
 
+def test_build_context_preamble_includes_startup_contract_and_launch_mode(
+    rc_config: RCConfig, run_dir: Path
+) -> None:
+    (run_dir / "startup_contract.json").write_text(
+        json.dumps(
+            {
+                "goal": "audit the existing paper and revise only where evidence is weak",
+                "launch_mode": "rebuttal_revision",
+                "objectives": ["address reviewer concerns", "preserve validated claims"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    text = rc_executor._build_context_preamble(rc_config, run_dir)
+    assert "## Startup Contract" in text
+    assert "rebuttal_revision" in text
+    assert "address reviewer concerns" in text
+
+
 def test_read_prior_artifact_finds_newest_file(run_dir: Path) -> None:
     _write_prior_artifact(run_dir, 1, "goal.md", "old")
     _write_prior_artifact(run_dir, 3, "goal.md", "new")

@@ -2,6 +2,7 @@
 
 详细教程见：
 - [docs/USAGE_TUTORIAL_CN.md](D:/codex/AutoResearchClaw/docs/USAGE_TUTORIAL_CN.md)
+- [docs/WORKSPACE_TUTORIAL_CN.md](D:/codex/AutoResearchClaw/docs/WORKSPACE_TUTORIAL_CN.md)
 
 如果你只想先跑通一遍，按下面做。
 

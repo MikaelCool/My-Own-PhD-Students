@@ -14,6 +14,7 @@ from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._domain import _detect_domain
 from researchclaw.pipeline._helpers import (
     StageResult,
+    _build_startup_contract_block,
     _get_evolution_overlay,
     _load_baseline_briefing,
     _read_prior_artifact,
@@ -85,7 +86,14 @@ def _execute_topic_init(
     )
     if llm is not None:
         _pm = prompts or PromptManager()
-        _overlay = _get_evolution_overlay(run_dir, "topic_init")
+        _overlay = "\n".join(
+            part
+            for part in (
+                _get_evolution_overlay(run_dir, "topic_init"),
+                _build_startup_contract_block(run_dir, stage_name="topic_init"),
+            )
+            if part
+        )
         sp = _pm.for_stage(
             "topic_init",
             evolution_overlay=_overlay,
@@ -171,7 +179,14 @@ def _execute_problem_decompose(
     baseline_briefing = _load_baseline_briefing(config)
     _pm = prompts or PromptManager()
     if llm is not None:
-        _overlay = _get_evolution_overlay(run_dir, "problem_decompose")
+        _overlay = "\n".join(
+            part
+            for part in (
+                _get_evolution_overlay(run_dir, "problem_decompose"),
+                _build_startup_contract_block(run_dir, stage_name="problem_decompose"),
+            )
+            if part
+        )
         sp = _pm.for_stage(
             "problem_decompose",
             evolution_overlay=_overlay,
@@ -213,7 +228,14 @@ Derived from `goal.md` for topic: {config.research.topic}
     (stage_dir / "problem_tree.md").write_text(body, encoding="utf-8")
 
     if llm is not None:
-        _anchor_overlay = _get_evolution_overlay(run_dir, "problem_decompose")
+        _anchor_overlay = "\n".join(
+            part
+            for part in (
+                _get_evolution_overlay(run_dir, "problem_decompose"),
+                _build_startup_contract_block(run_dir, stage_name="problem_decompose"),
+            )
+            if part
+        )
         _anchor_prompt = _pm.for_stage(
             "problem_anchor",
             evolution_overlay=_anchor_overlay,

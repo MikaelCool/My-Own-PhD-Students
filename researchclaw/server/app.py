@@ -27,6 +27,7 @@ def create_app(
     *,
     dashboard_only: bool = False,
     monitor_dir: str | None = None,
+    config_path: str | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -44,6 +45,7 @@ def create_app(
     # Store config in shared state
     _app_state["config"] = config
     _app_state["monitor_dir"] = monitor_dir
+    _app_state["config_path"] = config_path
 
     # --- CORS ---
     app.add_middleware(
@@ -86,9 +88,11 @@ def create_app(
     # --- Routes ---
     from researchclaw.server.routes.pipeline import router as pipeline_router
     from researchclaw.server.routes.projects import router as projects_router
+    from researchclaw.server.routes.settings import router as settings_router
 
     app.include_router(pipeline_router)
     app.include_router(projects_router)
+    app.include_router(settings_router)
 
     if not dashboard_only:
         from researchclaw.server.routes.chat import router as chat_router, set_chat_manager

@@ -62,6 +62,13 @@ def _blocked(stage: Stage) -> StageResult:
     )
 
 
+def _write_startup_contract(run_dir: Path, launch_mode: str) -> None:
+    (run_dir / "startup_contract.json").write_text(
+        json.dumps({"launch_mode": launch_mode, "goal": "runner test"}),
+        encoding="utf-8",
+    )
+
+
 def test_execute_pipeline_runs_stages_in_sequence(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
@@ -249,6 +256,58 @@ def test_execute_pipeline_from_stage_skips_earlier_stages(
     assert seen[0] == Stage.PAPER_OUTLINE
     assert len(seen) == len(STAGE_SEQUENCE) - (int(Stage.PAPER_OUTLINE) - 1)
     assert len(results) == len(seen)
+
+
+def test_execute_pipeline_review_only_stops_after_peer_review(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+    _write_startup_contract(run_dir, "review_only")
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    results = rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-review-only",
+        config=rc_config,
+        adapters=adapters,
+    )
+    assert seen[-1] == Stage.PEER_REVIEW
+    assert Stage.PAPER_REVISION not in seen
+    assert results[-1].stage == Stage.PEER_REVIEW
+
+
+def test_execute_pipeline_rebuttal_revision_stops_after_quality_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+    _write_startup_contract(run_dir, "rebuttal_revision")
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    results = rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-rebuttal",
+        config=rc_config,
+        adapters=adapters,
+        from_stage=Stage.PAPER_REVISION,
+    )
+    assert seen == [Stage.PAPER_REVISION, Stage.QUALITY_GATE]
+    assert results[-1].stage == Stage.QUALITY_GATE
 
 
 def test_execute_pipeline_writes_kb_entries_when_kb_root_provided(

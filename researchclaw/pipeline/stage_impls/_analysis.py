@@ -15,6 +15,7 @@ from researchclaw.pipeline._domain import _detect_domain, _is_ml_domain
 from researchclaw.pipeline._helpers import (
     StageResult,
     _build_context_preamble,
+    _build_startup_contract_block,
     _chat_with_prompt,
     _collect_experiment_results,
     _collect_json_context,
@@ -959,6 +960,8 @@ def _execute_research_decision(
         _claims_overlay = (
             _get_evolution_overlay(run_dir, "research_decision")
             + "\n"
+            + _build_startup_contract_block(run_dir, stage_name="research_decision")
+            + "\n"
             + build_phase_charter("research_decision")
             + "\n"
             + build_stage_skill_overlay(
@@ -1089,6 +1092,8 @@ def _execute_research_decision(
     if llm is not None:
         _overlay = (
             _get_evolution_overlay(run_dir, "research_decision")
+            + "\n"
+            + _build_startup_contract_block(run_dir, stage_name="research_decision")
             + "\n"
             + build_phase_charter("research_decision")
             + "\n"
