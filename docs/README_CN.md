@@ -2,12 +2,12 @@
   <img src="../image/logo.png" width="700" alt="AutoResearchClaw Logo">
 </p>
 
-<h2 align="center"><b>聊一个想法。出一篇论文。全自动 & 自演化。</b></h2>
+<h2 align="center"><b>鑱婁竴涓兂娉曘€傚嚭涓€绡囪鏂囥€傚叏鑷姩 & 鑷紨鍖栥€?/b></h2>
 
 
 
 <p align="center">
-  <b><i><font size="5">直接与 <a href="#openclaw-集成">OpenClaw</a> 对话："研究 X" → 搞定。</font></i></b>
+  <b><i><font size="5">鐩存帴涓?<a href="#openclaw-闆嗘垚">OpenClaw</a> 瀵硅瘽锛?鐮旂┒ X" 鈫?鎼炲畾銆?/font></i></b>
 </p>
 
 <p align="center">
@@ -18,27 +18,27 @@
 <p align="center">
   <a href="../LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+"></a>
-  <a href="#测试"><img src="https://img.shields.io/badge/Tests-1823%20passed-brightgreen?logo=pytest&logoColor=white" alt="1823 Tests Passed"></a>
-  <a href="https://github.com/aiming-lab/AutoResearchClaw"><img src="https://img.shields.io/badge/GitHub-AutoResearchClaw-181717?logo=github" alt="GitHub"></a>
-  <a href="#openclaw-集成"><img src="https://img.shields.io/badge/OpenClaw-Compatible-ff4444?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6IiBmaWxsPSJ3aGl0ZSIvPjwvc3ZnPg==" alt="OpenClaw Compatible"></a>
+  <a href="#娴嬭瘯"><img src="https://img.shields.io/badge/Tests-1823%20passed-brightgreen?logo=pytest&logoColor=white" alt="1823 Tests Passed"></a>
+  <a href="https://github.com/MikaelCool/My-Own-PhD-Students"><img src="https://img.shields.io/badge/GitHub-My_Own_PhD_Students-181717?logo=github" alt="GitHub"></a>
+  <a href="#openclaw-闆嗘垚"><img src="https://img.shields.io/badge/OpenClaw-Compatible-ff4444?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6IiBmaWxsPSJ3aGl0ZSIvPjwvc3ZnPg==" alt="OpenClaw Compatible"></a>
   <a href="https://discord.gg/u4ksqW5P"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
 </p>
 
 <p align="center">
-  <a href="../README.md">🇺🇸 English</a> ·
-  <a href="README_CN.md">🇨🇳 中文</a> ·
-  <a href="README_JA.md">🇯🇵 日本語</a> ·
-  <a href="README_KO.md">🇰🇷 한국어</a> ·
-  <a href="README_FR.md">🇫🇷 Français</a> ·
-  <a href="README_DE.md">🇩🇪 Deutsch</a> ·
-  <a href="README_ES.md">🇪🇸 Español</a> ·
-  <a href="README_PT.md">🇧🇷 Português</a> ·
-  <a href="README_RU.md">🇷🇺 Русский</a> ·
-  <a href="README_AR.md">🇸🇦 العربية</a>
+  <a href="../README.md">馃嚭馃嚫 English</a> 路
+  <a href="README_CN.md">馃嚚馃嚦 涓枃</a> 路
+  <a href="README_JA.md">馃嚡馃嚨 鏃ユ湰瑾?/a> 路
+  <a href="README_KO.md">馃嚢馃嚪 頃滉淡鞏?/a> 路
+  <a href="README_FR.md">馃嚝馃嚪 Fran莽ais</a> 路
+  <a href="README_DE.md">馃嚛馃嚜 Deutsch</a> 路
+  <a href="README_ES.md">馃嚜馃嚫 Espa帽ol</a> 路
+  <a href="README_PT.md">馃嚙馃嚪 Portugu锚s</a> 路
+  <a href="README_RU.md">馃嚪馃嚭 袪褍褋褋泻懈泄</a> 路
+  <a href="README_AR.md">馃嚫馃嚘 丕賱毓乇亘賷丞</a>
 </p>
 
 <p align="center">
-  <a href="showcase/SHOWCASE.md">🏆 论文展示</a> · <a href="integration-guide.md">📖 集成指南</a> · <a href="https://discord.gg/u4ksqW5P">💬 Discord 社区</a>
+  <a href="showcase/SHOWCASE.md">馃弳 璁烘枃灞曠ず</a> 路 <a href="integration-guide.md">馃摉 闆嗘垚鎸囧崡</a> 路 <a href="https://discord.gg/u4ksqW5P">馃挰 Discord 绀惧尯</a>
 </p>
 
 ---
@@ -49,29 +49,29 @@
 <a href="showcase/SHOWCASE.md"><img src="showcase/thumbnails/paper_I_random_matrix-01.png" width="120" alt="Sample Paper"/></a>
 </td>
 <td valign="middle">
-<b>🏆 生成论文展示</b><br><br>
-<b>8 篇论文覆盖 8 个领域</b> — 数学、统计、生物、计算、NLP、RL、视觉、鲁棒性 — 完全自主生成，零人工干预。<br><br>
-<a href="showcase/SHOWCASE.md"><img src="https://img.shields.io/badge/View_Full_Showcase_→-All_8_Papers-d73a49?style=for-the-badge" alt="View Showcase"></a>
+<b>馃弳 鐢熸垚璁烘枃灞曠ず</b><br><br>
+<b>8 绡囪鏂囪鐩?8 涓鍩?/b> 鈥?鏁板銆佺粺璁°€佺敓鐗┿€佽绠椼€丯LP銆丷L銆佽瑙夈€侀瞾妫掓€?鈥?瀹屽叏鑷富鐢熸垚锛岄浂浜哄伐骞查銆?br><br>
+<a href="showcase/SHOWCASE.md"><img src="https://img.shields.io/badge/View_Full_Showcase_鈫?All_8_Papers-d73a49?style=for-the-badge" alt="View Showcase"></a>
 </td>
 </tr>
 </table>
 
 ---
 
-> **🧪 我们正在寻找测试者！** 用你自己的研究想法试试这个流水线 — 任何领域 — 然后 [告诉我们你的反馈](TESTER_GUIDE.md)。你的反馈将直接影响下一个版本。 **[→ Testing Guide](TESTER_GUIDE.md)** | **[→ 中文测试指南](TESTER_GUIDE_CN.md)** | **[→ 日本語テストガイド](TESTER_GUIDE_JA.md)**
+> **馃И 鎴戜滑姝ｅ湪瀵绘壘娴嬭瘯鑰咃紒** 鐢ㄤ綘鑷繁鐨勭爺绌舵兂娉曡瘯璇曡繖涓祦姘寸嚎 鈥?浠讳綍棰嗗煙 鈥?鐒跺悗 [鍛婅瘔鎴戜滑浣犵殑鍙嶉](TESTER_GUIDE.md)銆備綘鐨勫弽棣堝皢鐩存帴褰卞搷涓嬩竴涓増鏈€?**[鈫?Testing Guide](TESTER_GUIDE.md)** | **[鈫?涓枃娴嬭瘯鎸囧崡](TESTER_GUIDE_CN.md)** | **[鈫?鏃ユ湰瑾炪儐銈广儓銈偆銉塢(TESTER_GUIDE_JA.md)**
 
 ---
 
-## 🔥 News
-- **[03/22/2026]** [v0.3.2](https://github.com/aiming-lab/AutoResearchClaw/releases/tag/v0.3.2) — **跨平台支持 + 重大稳定性更新** — AutoResearchClaw 现已支持任何 ACP 兼容的 AI 代理后端（Claude Code、Codex CLI、Copilot CLI、Gemini CLI、Kimi CLI），并通过 OpenClaw 桥接支持消息平台（Discord、Telegram、飞书、微信）。新增 CLI-agent 代码生成后端，将 Stage 10 和 13 委托给外部 CLI agent，支持预算控制和超时管理。同时包含反数据捏造系统（VerifiedRegistry + 实验诊断与修复循环），100+ 个 bug 修复，模块化 executor 重构，`--resume` 自动检测，LLM 重试加固，以及社区反馈修复。
-- **[03/18/2026]** [v0.3.1](https://github.com/aiming-lab/AutoResearchClaw/releases/tag/v0.3.1) — **OpenCode Beast Mode + Community Contributions** — New "Beast Mode" routes complex code generation to [OpenCode](https://github.com/anomalyco/opencode) with automatic complexity scoring and graceful fallback. Added Novita AI provider support, thread-safety hardening, improved LLM output parsing robustness, and 20+ bug fixes from community PRs and internal audit.
-- **[03/17/2026]** [v0.3.0](https://github.com/aiming-lab/AutoResearchClaw/releases/tag/v0.3.0) — **MetaClaw Integration** — AutoResearchClaw now supports [MetaClaw](https://github.com/aiming-lab/MetaClaw) cross-run learning: pipeline failures → structured lessons → reusable skills, injected into all 23 stages. **+18.3%** robustness in controlled experiments. Opt-in (`metaclaw_bridge.enabled: true`), fully backward-compatible. See [Integration Guide](#-metaclaw-integration).
-- **[03/16/2026]** [v0.2.0](https://github.com/aiming-lab/AutoResearchClaw/releases/tag/v0.2.0) — Three multi-agent subsystems (CodeAgent, BenchmarkAgent, FigureAgent), hardened Docker sandbox with network-policy-aware execution, 4-round paper quality audit (AI-slop detection, 7-dim review scoring, NeurIPS checklist), and 15+ bug fixes from production runs.
-- **[03/15/2026]** [v0.1.0](https://github.com/aiming-lab/AutoResearchClaw/releases/tag/v0.1.0) — We release AutoResearchClaw: a fully autonomous 23-stage research pipeline that turns a single research idea into a conference-ready paper. No human intervention required.
+## 馃敟 News
+- **[03/22/2026]** [v0.3.2](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.2) 鈥?**璺ㄥ钩鍙版敮鎸?+ 閲嶅ぇ绋冲畾鎬ф洿鏂?* 鈥?AutoResearchClaw 鐜板凡鏀寔浠讳綍 ACP 鍏煎鐨?AI 浠ｇ悊鍚庣锛圕laude Code銆丆odex CLI銆丆opilot CLI銆丟emini CLI銆並imi CLI锛夛紝骞堕€氳繃 OpenClaw 妗ユ帴鏀寔娑堟伅骞冲彴锛圖iscord銆乀elegram銆侀涔︺€佸井淇★級銆傛柊澧?CLI-agent 浠ｇ爜鐢熸垚鍚庣锛屽皢 Stage 10 鍜?13 濮旀墭缁欏閮?CLI agent锛屾敮鎸侀绠楁帶鍒跺拰瓒呮椂绠＄悊銆傚悓鏃跺寘鍚弽鏁版嵁鎹忛€犵郴缁燂紙VerifiedRegistry + 瀹為獙璇婃柇涓庝慨澶嶅惊鐜級锛?00+ 涓?bug 淇锛屾ā鍧楀寲 executor 閲嶆瀯锛宍--resume` 鑷姩妫€娴嬶紝LLM 閲嶈瘯鍔犲浐锛屼互鍙婄ぞ鍖哄弽棣堜慨澶嶃€?
+- **[03/18/2026]** [v0.3.1](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.1) 鈥?**OpenCode Beast Mode + Community Contributions** 鈥?New "Beast Mode" routes complex code generation to [OpenCode](https://github.com/anomalyco/opencode) with automatic complexity scoring and graceful fallback. Added Novita AI provider support, thread-safety hardening, improved LLM output parsing robustness, and 20+ bug fixes from community PRs and internal audit.
+- **[03/17/2026]** [v0.3.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.0) 鈥?**MetaClaw Integration** 鈥?AutoResearchClaw now supports [MetaClaw](https://github.com/aiming-lab/MetaClaw) cross-run learning: pipeline failures 鈫?structured lessons 鈫?reusable skills, injected into all 23 stages. **+18.3%** robustness in controlled experiments. Opt-in (`metaclaw_bridge.enabled: true`), fully backward-compatible. See [Integration Guide](#-metaclaw-integration).
+- **[03/16/2026]** [v0.2.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.2.0) 鈥?Three multi-agent subsystems (CodeAgent, BenchmarkAgent, FigureAgent), hardened Docker sandbox with network-policy-aware execution, 4-round paper quality audit (AI-slop detection, 7-dim review scoring, NeurIPS checklist), and 15+ bug fixes from production runs.
+- **[03/15/2026]** [v0.1.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.1.0) 鈥?We release AutoResearchClaw: a fully autonomous 23-stage research pipeline that turns a single research idea into a conference-ready paper. No human intervention required.
 
 ---
 
-## ⚡ 一行命令。一篇论文。
+## 鈿?涓€琛屽懡浠ゃ€備竴绡囪鏂囥€?
 
 ```bash
 pip install -e . && researchclaw setup && researchclaw init && researchclaw run --topic "Your research idea here" --auto-approve
@@ -80,55 +80,55 @@ pip install -e . && researchclaw setup && researchclaw init && researchclaw run 
 
 ---
 
-## 🤔 这是什么？
+## 馃 杩欐槸浠€涔堬紵
 
-**你有一个灵感，AutoResearchClaw 把它写出来。**
+**浣犳湁涓€涓伒鎰燂紝AutoResearchClaw 鎶婂畠鍐欏嚭鏉ャ€?*
 
-输入一个研究主题——获得一篇完整的学术论文，包含来自 OpenAlex、Semantic Scholar 和 arXiv 的真实文献，硬件感知沙箱实验（自动检测 GPU/MPS/CPU），统计分析，多 Agent 同行评审，以及面向 NeurIPS/ICML/ICLR 的顶会级 LaTeX。不需要盯着看。不需要复制粘贴。不会出现幻觉引用。
+杈撳叆涓€涓爺绌朵富棰樷€斺€旇幏寰椾竴绡囧畬鏁寸殑瀛︽湳璁烘枃锛屽寘鍚潵鑷?OpenAlex銆丼emantic Scholar 鍜?arXiv 鐨勭湡瀹炴枃鐚紝纭欢鎰熺煡娌欑瀹為獙锛堣嚜鍔ㄦ娴?GPU/MPS/CPU锛夛紝缁熻鍒嗘瀽锛屽 Agent 鍚岃璇勫锛屼互鍙婇潰鍚?NeurIPS/ICML/ICLR 鐨勯《浼氱骇 LaTeX銆備笉闇€瑕佺洴鐫€鐪嬨€備笉闇€瑕佸鍒剁矘璐淬€備笉浼氬嚭鐜板够瑙夊紩鐢ㄣ€?
 
 <table>
-<tr><td>📄</td><td><code>paper_draft.md</code></td><td>完整学术论文（引言、相关工作、方法、实验、结果、结论）</td></tr>
-<tr><td>📐</td><td><code>paper.tex</code></td><td>适配顶会模板的 LaTeX 文件（NeurIPS / ICLR / ICML）</td></tr>
-<tr><td>📚</td><td><code>references.bib</code></td><td>来自 OpenAlex、Semantic Scholar 和 arXiv 的真实 BibTeX 引用——自动精简至与正文引用一致</td></tr>
-<tr><td>🔍</td><td><code>verification_report.json</code></td><td>四层引用完整性 + 相关性核查（arXiv、CrossRef、DataCite、LLM）</td></tr>
-<tr><td>🧪</td><td><code>experiment runs/</code></td><td>生成的代码 + 沙箱结果 + 结构化 JSON 指标</td></tr>
-<tr><td>📊</td><td><code>charts/</code></td><td>自动生成的条件对比图（含误差线和置信区间）</td></tr>
-<tr><td>📝</td><td><code>reviews.md</code></td><td>多 Agent 同行评审（含方法论-证据一致性检查）</td></tr>
-<tr><td>🧬</td><td><code>evolution/</code></td><td>从每次运行中提取的自学习教训</td></tr>
-<tr><td>📦</td><td><code>deliverables/</code></td><td>所有最终产出集中在一个文件夹——可直接上传 Overleaf 编译</td></tr>
+<tr><td>馃搫</td><td><code>paper_draft.md</code></td><td>瀹屾暣瀛︽湳璁烘枃锛堝紩瑷€銆佺浉鍏冲伐浣溿€佹柟娉曘€佸疄楠屻€佺粨鏋溿€佺粨璁猴級</td></tr>
+<tr><td>馃搻</td><td><code>paper.tex</code></td><td>閫傞厤椤朵細妯℃澘鐨?LaTeX 鏂囦欢锛圢eurIPS / ICLR / ICML锛?/td></tr>
+<tr><td>馃摎</td><td><code>references.bib</code></td><td>鏉ヨ嚜 OpenAlex銆丼emantic Scholar 鍜?arXiv 鐨勭湡瀹?BibTeX 寮曠敤鈥斺€旇嚜鍔ㄧ簿绠€鑷充笌姝ｆ枃寮曠敤涓€鑷?/td></tr>
+<tr><td>馃攳</td><td><code>verification_report.json</code></td><td>鍥涘眰寮曠敤瀹屾暣鎬?+ 鐩稿叧鎬ф牳鏌ワ紙arXiv銆丆rossRef銆丏ataCite銆丩LM锛?/td></tr>
+<tr><td>馃И</td><td><code>experiment runs/</code></td><td>鐢熸垚鐨勪唬鐮?+ 娌欑缁撴灉 + 缁撴瀯鍖?JSON 鎸囨爣</td></tr>
+<tr><td>馃搳</td><td><code>charts/</code></td><td>鑷姩鐢熸垚鐨勬潯浠跺姣斿浘锛堝惈璇樊绾垮拰缃俊鍖洪棿锛?/td></tr>
+<tr><td>馃摑</td><td><code>reviews.md</code></td><td>澶?Agent 鍚岃璇勫锛堝惈鏂规硶璁?璇佹嵁涓€鑷存€ф鏌ワ級</td></tr>
+<tr><td>馃К</td><td><code>evolution/</code></td><td>浠庢瘡娆¤繍琛屼腑鎻愬彇鐨勮嚜瀛︿範鏁欒</td></tr>
+<tr><td>馃摝</td><td><code>deliverables/</code></td><td>鎵€鏈夋渶缁堜骇鍑洪泦涓湪涓€涓枃浠跺す鈥斺€斿彲鐩存帴涓婁紶 Overleaf 缂栬瘧</td></tr>
 </table>
 
-流水线**端到端无需人工介入**运行。实验失败时自动修复。假设不成立时自主转向。引用是假的？自动删除。
+娴佹按绾?*绔埌绔棤闇€浜哄伐浠嬪叆**杩愯銆傚疄楠屽け璐ユ椂鑷姩淇銆傚亣璁句笉鎴愮珛鏃惰嚜涓昏浆鍚戙€傚紩鐢ㄦ槸鍋囩殑锛熻嚜鍔ㄥ垹闄ゃ€?
 
-🌍 **随处可用。** AutoResearchClaw 不绑定任何单一平台。你可以通过 CLI 独立运行，接入 [OpenClaw](https://github.com/openclaw/openclaw)，或对接任何 ACP 兼容的 AI 代理 —— 🤖 Claude Code、💻 Codex CLI、🐙 Copilot CLI、♊ Gemini CLI、🌙 Kimi CLI，应有尽有。而且，借助 OpenClaw 的消息桥接能力，你还可以从 💬 Discord、✈️ Telegram、🐦 飞书、💚 微信，或任何你团队日常使用的平台发起一次完整的研究。输入一个课题，输出一篇论文 —— 无论你在哪里输入。
+馃實 **闅忓鍙敤銆?* AutoResearchClaw 涓嶇粦瀹氫换浣曞崟涓€骞冲彴銆備綘鍙互閫氳繃 CLI 鐙珛杩愯锛屾帴鍏?[OpenClaw](https://github.com/openclaw/openclaw)锛屾垨瀵规帴浠讳綍 ACP 鍏煎鐨?AI 浠ｇ悊 鈥斺€?馃 Claude Code銆侌煉?Codex CLI銆侌煇?Copilot CLI銆佲檴 Gemini CLI銆侌煂?Kimi CLI锛屽簲鏈夊敖鏈夈€傝€屼笖锛屽€熷姪 OpenClaw 鐨勬秷鎭ˉ鎺ヨ兘鍔涳紝浣犺繕鍙互浠?馃挰 Discord銆佲湀锔?Telegram銆侌煇?椋炰功銆侌煉?寰俊锛屾垨浠讳綍浣犲洟闃熸棩甯镐娇鐢ㄧ殑骞冲彴鍙戣捣涓€娆″畬鏁寸殑鐮旂┒銆傝緭鍏ヤ竴涓棰橈紝杈撳嚭涓€绡囪鏂?鈥斺€?鏃犺浣犲湪鍝噷杈撳叆銆?
 
 ---
 
-## 🚀 快速开始
+## 馃殌 蹇€熷紑濮?
 
 ```bash
-# 1. 克隆 & 安装
-git clone https://github.com/aiming-lab/AutoResearchClaw.git
-cd AutoResearchClaw
+# 1. 鍏嬮殕 & 瀹夎
+git clone https://github.com/MikaelCool/My-Own-PhD-Students.git
+cd My-Own-PhD-Students
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-# 2. 初始化（交互式 — 安装 OpenCode Beast Mode，检查 Docker/LaTeX）
+# 2. 鍒濆鍖栵紙浜や簰寮?鈥?瀹夎 OpenCode Beast Mode锛屾鏌?Docker/LaTeX锛?
 researchclaw setup
 
-# 3. 配置
-researchclaw init          # 交互式：选择 LLM 提供商，创建 config.arc.yaml
-# 或手动：cp config.researchclaw.example.yaml config.arc.yaml
+# 3. 閰嶇疆
+researchclaw init          # 浜や簰寮忥細閫夋嫨 LLM 鎻愪緵鍟嗭紝鍒涘缓 config.arc.yaml
+# 鎴栨墜鍔細cp config.researchclaw.example.yaml config.arc.yaml
 
-# 4. 运行
+# 4. 杩愯
 export OPENAI_API_KEY="sk-..."
 researchclaw run --config config.arc.yaml --topic "Your research idea" --auto-approve
 ```
 
-输出 → `artifacts/rc-YYYYMMDD-HHMMSS-<hash>/deliverables/` — 可编译的 LaTeX、BibTeX、实验代码、图表。
+杈撳嚭 鈫?`artifacts/rc-YYYYMMDD-HHMMSS-<hash>/deliverables/` 鈥?鍙紪璇戠殑 LaTeX銆丅ibTeX銆佸疄楠屼唬鐮併€佸浘琛ㄣ€?
 
 <details>
-<summary>📝 最小必要配置</summary>
+<summary>馃摑 鏈€灏忓繀瑕侀厤缃?/summary>
 
 ```yaml
 project:
@@ -153,75 +153,75 @@ experiment:
 
 ---
 
-## 🧠 有什么不同
+## 馃 鏈変粈涔堜笉鍚?
 
-| 能力 | 工作原理 |
+| 鑳藉姏 | 宸ヤ綔鍘熺悊 |
 |------|----------|
-| **🔄 PIVOT / REFINE 循环** | 第 15 阶段自主决策：PROCEED、REFINE（调参）或 PIVOT（新方向）。产物自动版本化。 |
-| **🤖 多 Agent 辩论** | 假设生成、结果分析、同行评审均使用结构化的多视角辩论。 |
-| **🧬 自学习** | 每次运行提取教训（决策理由、运行时警告、指标异常），30 天时间衰减。未来运行从过去的错误中学习。 |
-| **📚 知识库** | 每次运行在 6 个类别（决策、实验、发现、文献、问题、评审）中构建结构化知识库。 |
-| **🛡️ Sentinel 看门狗** | 后台质量监控：NaN/Inf 检测、论文-证据一致性、引用相关性评分、反数据捏造守卫。 |
+| **馃攧 PIVOT / REFINE 寰幆** | 绗?15 闃舵鑷富鍐崇瓥锛歅ROCEED銆丷EFINE锛堣皟鍙傦級鎴?PIVOT锛堟柊鏂瑰悜锛夈€備骇鐗╄嚜鍔ㄧ増鏈寲銆?|
+| **馃 澶?Agent 杈╄** | 鍋囪鐢熸垚銆佺粨鏋滃垎鏋愩€佸悓琛岃瘎瀹″潎浣跨敤缁撴瀯鍖栫殑澶氳瑙掕京璁恒€?|
+| **馃К 鑷涔?* | 姣忔杩愯鎻愬彇鏁欒锛堝喅绛栫悊鐢便€佽繍琛屾椂璀﹀憡銆佹寚鏍囧紓甯革級锛?0 澶╂椂闂磋“鍑忋€傛湭鏉ヨ繍琛屼粠杩囧幓鐨勯敊璇腑瀛︿範銆?|
+| **馃摎 鐭ヨ瘑搴?* | 姣忔杩愯鍦?6 涓被鍒紙鍐崇瓥銆佸疄楠屻€佸彂鐜般€佹枃鐚€侀棶棰樸€佽瘎瀹★級涓瀯寤虹粨鏋勫寲鐭ヨ瘑搴撱€?|
+| **馃洝锔?Sentinel 鐪嬮棬鐙?* | 鍚庡彴璐ㄩ噺鐩戞帶锛歂aN/Inf 妫€娴嬨€佽鏂?璇佹嵁涓€鑷存€с€佸紩鐢ㄧ浉鍏虫€ц瘎鍒嗐€佸弽鏁版嵁鎹忛€犲畧鍗€?|
 
 ---
 
-## 🦞 OpenClaw 集成
+## 馃 OpenClaw 闆嗘垚
 
 <table>
 <tr>
 
-**AutoResearchClaw 是 [OpenClaw](https://github.com/openclaw/openclaw) 兼容服务。** 在 OpenClaw 中安装后，一句话即可启动自主研究——也可通过 CLI、Claude Code 或其他 AI 编码助手独立使用。
+**AutoResearchClaw 鏄?[OpenClaw](https://github.com/openclaw/openclaw) 鍏煎鏈嶅姟銆?* 鍦?OpenClaw 涓畨瑁呭悗锛屼竴鍙ヨ瘽鍗冲彲鍚姩鑷富鐮旂┒鈥斺€斾篃鍙€氳繃 CLI銆丆laude Code 鎴栧叾浠?AI 缂栫爜鍔╂墜鐙珛浣跨敤銆?
 
 </tr>
 </table>
 
-### 🚀 通过 OpenClaw 使用（推荐）
+### 馃殌 閫氳繃 OpenClaw 浣跨敤锛堟帹鑽愶級
 
-如果你已经在使用 [OpenClaw](https://github.com/openclaw/openclaw) 作为 AI 助手：
+濡傛灉浣犲凡缁忓湪浣跨敤 [OpenClaw](https://github.com/openclaw/openclaw) 浣滀负 AI 鍔╂墜锛?
 
 ```
-1️⃣  把 GitHub 仓库地址分享给 OpenClaw
-2️⃣  OpenClaw 自动读取 RESEARCHCLAW_AGENTS.md → 理解流水线
-3️⃣  对它说："帮我研究 [你的主题]"
-4️⃣  完成 — OpenClaw 自动克隆、安装、配置、运行，然后返回结果
+1锔忊儯  鎶?GitHub 浠撳簱鍦板潃鍒嗕韩缁?OpenClaw
+2锔忊儯  OpenClaw 鑷姩璇诲彇 RESEARCHCLAW_AGENTS.md 鈫?鐞嗚В娴佹按绾?
+3锔忊儯  瀵瑰畠璇达細"甯垜鐮旂┒ [浣犵殑涓婚]"
+4锔忊儯  瀹屾垚 鈥?OpenClaw 鑷姩鍏嬮殕銆佸畨瑁呫€侀厤缃€佽繍琛岋紝鐒跺悗杩斿洖缁撴灉
 ```
 
-**就这么简单。** OpenClaw 自动处理 `git clone`、`pip install`、配置和流水线执行。你只需聊天。
+**灏辫繖涔堢畝鍗曘€?* OpenClaw 鑷姩澶勭悊 `git clone`銆乣pip install`銆侀厤缃拰娴佹按绾挎墽琛屻€備綘鍙渶鑱婂ぉ銆?
 
 <details>
-<summary>💡 底层发生了什么</summary>
+<summary>馃挕 搴曞眰鍙戠敓浜嗕粈涔?/summary>
 
-1. OpenClaw 读取 `RESEARCHCLAW_AGENTS.md` → 学习研究编排器角色
-2. OpenClaw 读取 `README.md` → 理解安装方式和流水线结构
-3. OpenClaw 复制 `config.researchclaw.example.yaml` → `config.yaml`
-4. 向你询问 LLM API Key（或使用环境变量）
-5. 运行 `pip install -e .` + `researchclaw run --topic "..." --auto-approve`
-6. 返回论文、LaTeX、实验结果和引用
+1. OpenClaw 璇诲彇 `RESEARCHCLAW_AGENTS.md` 鈫?瀛︿範鐮旂┒缂栨帓鍣ㄨ鑹?
+2. OpenClaw 璇诲彇 `README.md` 鈫?鐞嗚В瀹夎鏂瑰紡鍜屾祦姘寸嚎缁撴瀯
+3. OpenClaw 澶嶅埗 `config.researchclaw.example.yaml` 鈫?`config.yaml`
+4. 鍚戜綘璇㈤棶 LLM API Key锛堟垨浣跨敤鐜鍙橀噺锛?
+5. 杩愯 `pip install -e .` + `researchclaw run --topic "..." --auto-approve`
+6. 杩斿洖璁烘枃銆丩aTeX銆佸疄楠岀粨鏋滃拰寮曠敤
 
 </details>
 
-### 🔌 OpenClaw Bridge（高级功能）
+### 馃攲 OpenClaw Bridge锛堥珮绾у姛鑳斤級
 
-AutoResearchClaw 内置了 **Bridge 适配器系统**，提供 6 个可选集成能力：
+AutoResearchClaw 鍐呯疆浜?**Bridge 閫傞厤鍣ㄧ郴缁?*锛屾彁渚?6 涓彲閫夐泦鎴愯兘鍔涳細
 
 ```yaml
 # config.arc.yaml
 openclaw_bridge:
-  use_cron: true              # ⏰ 定时研究任务
-  use_message: true           # 💬 进度通知（Discord/Slack/Telegram）
-  use_memory: true            # 🧠 跨会话知识持久化
-  use_sessions_spawn: true    # 🔀 为并行阶段派生子会话
-  use_web_fetch: true         # 🌐 文献检索中的实时网络搜索
-  use_browser: false          # 🖥️ 基于浏览器的论文采集
+  use_cron: true              # 鈴?瀹氭椂鐮旂┒浠诲姟
+  use_message: true           # 馃挰 杩涘害閫氱煡锛圖iscord/Slack/Telegram锛?
+  use_memory: true            # 馃 璺ㄤ細璇濈煡璇嗘寔涔呭寲
+  use_sessions_spawn: true    # 馃攢 涓哄苟琛岄樁娈垫淳鐢熷瓙浼氳瘽
+  use_web_fetch: true         # 馃寪 鏂囩尞妫€绱腑鐨勫疄鏃剁綉缁滄悳绱?
+  use_browser: false          # 馃枼锔?鍩轰簬娴忚鍣ㄧ殑璁烘枃閲囬泦
 ```
 
-每个标志激活一个类型化适配器协议。当 OpenClaw 提供对应能力时，适配器无需改代码即可消费。详见 [`integration-guide.md`](integration-guide.md)。
+姣忎釜鏍囧織婵€娲讳竴涓被鍨嬪寲閫傞厤鍣ㄥ崗璁€傚綋 OpenClaw 鎻愪緵瀵瑰簲鑳藉姏鏃讹紝閫傞厤鍣ㄦ棤闇€鏀逛唬鐮佸嵆鍙秷璐广€傝瑙?[`integration-guide.md`](integration-guide.md)銆?
 
 ### ACP (Agent Client Protocol)
 
-AutoResearchClaw 可以使用**任何 ACP 兼容的编码 Agent** 作为其 LLM 后端——无需 API 密钥。Agent 通过 [acpx](https://github.com/openclaw/acpx) 通信，在全部 23 个流水线阶段中维持单个持久会话。
+AutoResearchClaw 鍙互浣跨敤**浠讳綍 ACP 鍏煎鐨勭紪鐮?Agent** 浣滀负鍏?LLM 鍚庣鈥斺€旀棤闇€ API 瀵嗛挜銆侫gent 閫氳繃 [acpx](https://github.com/openclaw/acpx) 閫氫俊锛屽湪鍏ㄩ儴 23 涓祦姘寸嚎闃舵涓淮鎸佸崟涓寔涔呬細璇濄€?
 
-| Agent | 命令 | 备注 |
+| Agent | 鍛戒护 | 澶囨敞 |
 |-------|------|------|
 | Claude Code | `claude` | Anthropic |
 | Codex CLI | `codex` | OpenAI |
@@ -231,211 +231,211 @@ AutoResearchClaw 可以使用**任何 ACP 兼容的编码 Agent** 作为其 LLM 
 | Kimi CLI | `kimi` | Moonshot |
 
 ```yaml
-# config.yaml — ACP 示例
+# config.yaml 鈥?ACP 绀轰緥
 llm:
   provider: "acp"
   acp:
-    agent: "claude"   # 任何 ACP 兼容的 Agent CLI 命令
-    cwd: "."          # Agent 的工作目录
-  # 无需 base_url 或 api_key — Agent 自行处理认证。
+    agent: "claude"   # 浠讳綍 ACP 鍏煎鐨?Agent CLI 鍛戒护
+    cwd: "."          # Agent 鐨勫伐浣滅洰褰?
+  # 鏃犻渶 base_url 鎴?api_key 鈥?Agent 鑷澶勭悊璁よ瘉銆?
 ```
 
 ```bash
-# 直接运行 — Agent 使用自己的凭据
+# 鐩存帴杩愯 鈥?Agent 浣跨敤鑷繁鐨勫嚟鎹?
 researchclaw run --config config.yaml --topic "Your research idea" --auto-approve
 ```
 
-### 🛠️ 其他运行方式
+### 馃洜锔?鍏朵粬杩愯鏂瑰紡
 
-| 方式 | 怎么用 |
+| 鏂瑰紡 | 鎬庝箞鐢?|
 |------|--------|
-| **独立 CLI** | `researchclaw setup` → `researchclaw init` → `researchclaw run --topic "..." --auto-approve` |
+| **鐙珛 CLI** | `researchclaw setup` 鈫?`researchclaw init` 鈫?`researchclaw run --topic "..." --auto-approve` |
 | **Python API** | `from researchclaw.pipeline import Runner; Runner(config).run()` |
-| **Claude Code** | 读取 `RESEARCHCLAW_CLAUDE.md` — 直接说 *"Run research on [主题]"* |
-| **Copilot CLI** | `researchclaw run --topic "..."` 配合 `llm.acp.agent: "gh"` |
-| **OpenCode** | 读取 `.claude/skills/` — 同样的自然语言交互 |
-| **任何 AI CLI** | 提供 `RESEARCHCLAW_AGENTS.md` 作为上下文 → agent 自动引导 |
+| **Claude Code** | 璇诲彇 `RESEARCHCLAW_CLAUDE.md` 鈥?鐩存帴璇?*"Run research on [涓婚]"* |
+| **Copilot CLI** | `researchclaw run --topic "..."` 閰嶅悎 `llm.acp.agent: "gh"` |
+| **OpenCode** | 璇诲彇 `.claude/skills/` 鈥?鍚屾牱鐨勮嚜鐒惰瑷€浜や簰 |
+| **浠讳綍 AI CLI** | 鎻愪緵 `RESEARCHCLAW_AGENTS.md` 浣滀负涓婁笅鏂?鈫?agent 鑷姩寮曞 |
 
 ---
 
-## 🔬 流水线：23 个阶段，8 个阶段组
+## 馃敩 娴佹按绾匡細23 涓樁娈碉紝8 涓樁娈电粍
 
 ```
-阶段组 A：研究定义                阶段组 E：实验执行
+闃舵缁?A锛氱爺绌跺畾涔?               闃舵缁?E锛氬疄楠屾墽琛?
   1. TOPIC_INIT                    12. EXPERIMENT_RUN
-  2. PROBLEM_DECOMPOSE             13. ITERATIVE_REFINE  ← 自修复
+  2. PROBLEM_DECOMPOSE             13. ITERATIVE_REFINE  鈫?鑷慨澶?
 
-阶段组 B：文献发现                阶段组 F：分析与决策
-  3. SEARCH_STRATEGY               14. RESULT_ANALYSIS    ← 多Agent
-  4. LITERATURE_COLLECT ← 真实API  15. RESEARCH_DECISION  ← PIVOT/REFINE
-  5. LITERATURE_SCREEN  [门控]
-  6. KNOWLEDGE_EXTRACT             阶段组 G：论文撰写
+闃舵缁?B锛氭枃鐚彂鐜?               闃舵缁?F锛氬垎鏋愪笌鍐崇瓥
+  3. SEARCH_STRATEGY               14. RESULT_ANALYSIS    鈫?澶欰gent
+  4. LITERATURE_COLLECT 鈫?鐪熷疄API  15. RESEARCH_DECISION  鈫?PIVOT/REFINE
+  5. LITERATURE_SCREEN  [闂ㄦ帶]
+  6. KNOWLEDGE_EXTRACT             闃舵缁?G锛氳鏂囨挵鍐?
                                    16. PAPER_OUTLINE
-阶段组 C：知识综合                 17. PAPER_DRAFT
-  7. SYNTHESIS                     18. PEER_REVIEW        ← 证据审查
-  8. HYPOTHESIS_GEN   ← 辩论      19. PAPER_REVISION
+闃舵缁?C锛氱煡璇嗙患鍚?                17. PAPER_DRAFT
+  7. SYNTHESIS                     18. PEER_REVIEW        鈫?璇佹嵁瀹℃煡
+  8. HYPOTHESIS_GEN   鈫?杈╄      19. PAPER_REVISION
 
-阶段组 D：实验设计                阶段组 H：终稿
-  9. EXPERIMENT_DESIGN  [门控]     20. QUALITY_GATE     [门控]
+闃舵缁?D锛氬疄楠岃璁?               闃舵缁?H锛氱粓绋?
+  9. EXPERIMENT_DESIGN  [闂ㄦ帶]     20. QUALITY_GATE     [闂ㄦ帶]
  10. CODE_GENERATION               21. KNOWLEDGE_ARCHIVE
- 11. RESOURCE_PLANNING             22. EXPORT_PUBLISH    ← LaTeX
-                                   23. CITATION_VERIFY   ← 相关性审查
+ 11. RESOURCE_PLANNING             22. EXPORT_PUBLISH    鈫?LaTeX
+                                   23. CITATION_VERIFY   鈫?鐩稿叧鎬у鏌?
 ```
 
-> **门控阶段**（5、9、20）可暂停等待人工审批，也可用 `--auto-approve` 自动通过。拒绝后流水线回滚。
+> **闂ㄦ帶闃舵**锛?銆?銆?0锛夊彲鏆傚仠绛夊緟浜哄伐瀹℃壒锛屼篃鍙敤 `--auto-approve` 鑷姩閫氳繃銆傛嫆缁濆悗娴佹按绾垮洖婊氥€?
 
-> **决策循环**：第 15 阶段可触发 REFINE（→ 第 13 阶段）或 PIVOT（→ 第 8 阶段），自动版本化之前的产物。
+> **鍐崇瓥寰幆**锛氱 15 闃舵鍙Е鍙?REFINE锛堚啋 绗?13 闃舵锛夋垨 PIVOT锛堚啋 绗?8 闃舵锛夛紝鑷姩鐗堟湰鍖栦箣鍓嶇殑浜х墿銆?
 
 <details>
-<summary>📋 各阶段组职责</summary>
+<summary>馃搵 鍚勯樁娈电粍鑱岃矗</summary>
 
-| 阶段组 | 做什么 |
+| 闃舵缁?| 鍋氫粈涔?|
 |--------|--------|
-| **A：定义** | LLM 将主题分解为结构化问题树和研究问题 |
-| **A+：硬件检测** | 自动检测 GPU（NVIDIA CUDA / Apple MPS / 纯 CPU），性能不足时警告用户，据此调整代码生成策略 |
-| **B：文献** | 多源搜索（OpenAlex → Semantic Scholar → arXiv）获取真实论文，按相关性筛选，提取知识卡片 |
-| **C：综合** | 聚类研究发现，识别研究空白，通过多 Agent 辩论生成可验证假设 |
-| **D：设计** | 设计实验方案，生成硬件感知的可运行 Python 代码（GPU 等级 → 包选择），估算资源需求 |
-| **E：执行** | 在沙箱中运行实验，检测 NaN/Inf 和运行时 Bug，通过定向 LLM 修复自愈代码 |
-| **F：分析** | 多 Agent 分析实验结果；自主 PROCEED / REFINE / PIVOT 决策并附理由 |
-| **G：写作** | 大纲 → 分段撰写初稿（5,000-6,500 词）→ 同行评审（含方法论-证据一致性）→ 带长度保障的修订 |
-| **H：终稿** | 质量门控，知识归档，LaTeX 导出（适配顶会模板），引用完整性 + 相关性核查 |
+| **A锛氬畾涔?* | LLM 灏嗕富棰樺垎瑙ｄ负缁撴瀯鍖栭棶棰樻爲鍜岀爺绌堕棶棰?|
+| **A+锛氱‖浠舵娴?* | 鑷姩妫€娴?GPU锛圢VIDIA CUDA / Apple MPS / 绾?CPU锛夛紝鎬ц兘涓嶈冻鏃惰鍛婄敤鎴凤紝鎹璋冩暣浠ｇ爜鐢熸垚绛栫暐 |
+| **B锛氭枃鐚?* | 澶氭簮鎼滅储锛圤penAlex 鈫?Semantic Scholar 鈫?arXiv锛夎幏鍙栫湡瀹炶鏂囷紝鎸夌浉鍏虫€х瓫閫夛紝鎻愬彇鐭ヨ瘑鍗＄墖 |
+| **C锛氱患鍚?* | 鑱氱被鐮旂┒鍙戠幇锛岃瘑鍒爺绌剁┖鐧斤紝閫氳繃澶?Agent 杈╄鐢熸垚鍙獙璇佸亣璁?|
+| **D锛氳璁?* | 璁捐瀹為獙鏂规锛岀敓鎴愮‖浠舵劅鐭ョ殑鍙繍琛?Python 浠ｇ爜锛圙PU 绛夌骇 鈫?鍖呴€夋嫨锛夛紝浼扮畻璧勬簮闇€姹?|
+| **E锛氭墽琛?* | 鍦ㄦ矙绠变腑杩愯瀹為獙锛屾娴?NaN/Inf 鍜岃繍琛屾椂 Bug锛岄€氳繃瀹氬悜 LLM 淇鑷剤浠ｇ爜 |
+| **F锛氬垎鏋?* | 澶?Agent 鍒嗘瀽瀹為獙缁撴灉锛涜嚜涓?PROCEED / REFINE / PIVOT 鍐崇瓥骞堕檮鐞嗙敱 |
+| **G锛氬啓浣?* | 澶х翰 鈫?鍒嗘鎾板啓鍒濈锛?,000-6,500 璇嶏級鈫?鍚岃璇勫锛堝惈鏂规硶璁?璇佹嵁涓€鑷存€э級鈫?甯﹂暱搴︿繚闅滅殑淇 |
+| **H锛氱粓绋?* | 璐ㄩ噺闂ㄦ帶锛岀煡璇嗗綊妗ｏ紝LaTeX 瀵煎嚭锛堥€傞厤椤朵細妯℃澘锛夛紝寮曠敤瀹屾暣鎬?+ 鐩稿叧鎬ф牳鏌?|
 
 </details>
 
 ---
 
-## ✨ 核心功能
+## 鉁?鏍稿績鍔熻兘
 
-| 功能 | 说明 |
+| 鍔熻兘 | 璇存槑 |
 |------|------|
-| **📚 多源文献** | 来自 OpenAlex、Semantic Scholar 和 arXiv 的真实论文——查询扩展、去重、三态熔断器与优雅降级 |
-| **🔍 四层引用核查** | arXiv ID 校验 → CrossRef/DataCite DOI → Semantic Scholar 标题匹配 → LLM 相关性评分。幻觉引用自动删除。 |
-| **🖥️ 硬件感知执行** | 自动检测 GPU（NVIDIA CUDA / Apple MPS / 纯 CPU），据此调整代码生成、import 和实验规模 |
-| **🦾 OpenCode Beast Mode** | 复杂实验自动路由至 [OpenCode](https://github.com/anomalyco/opencode)——生成多文件项目，含自定义架构、训练循环和消融实验。通过 `researchclaw setup` 安装。 |
-| **🧪 沙箱实验** | AST 验证代码、不可变 harness、NaN/Inf 快速失败、自修复、迭代优化（最多 10 轮）、部分结果捕获 |
-| **📝 顶会级写作** | NeurIPS/ICML/ICLR 模板，分段撰写（5,000-6,500 词），反数据捏造守卫、修订长度保障、反免责声明强制 |
-| **📐 模板切换** | `neurips_2025`、`iclr_2026`、`icml_2026` — Markdown → LaTeX，含数学公式、表格、图片、交叉引用、`\cite{}` |
-| **🛡️ 反数据捏造** | VerifiedRegistry 强制论文中使用经过验证的实验数据。自动诊断失败实验并在写作前修复。未验证数字被清理。 |
-| **🚦 质量门控** | 3 个人工审批门控（阶段 5、9、20），支持回滚。用 `--auto-approve` 跳过。 |
+| **馃摎 澶氭簮鏂囩尞** | 鏉ヨ嚜 OpenAlex銆丼emantic Scholar 鍜?arXiv 鐨勭湡瀹炶鏂団€斺€旀煡璇㈡墿灞曘€佸幓閲嶃€佷笁鎬佺啍鏂櫒涓庝紭闆呴檷绾?|
+| **馃攳 鍥涘眰寮曠敤鏍告煡** | arXiv ID 鏍￠獙 鈫?CrossRef/DataCite DOI 鈫?Semantic Scholar 鏍囬鍖归厤 鈫?LLM 鐩稿叧鎬ц瘎鍒嗐€傚够瑙夊紩鐢ㄨ嚜鍔ㄥ垹闄ゃ€?|
+| **馃枼锔?纭欢鎰熺煡鎵ц** | 鑷姩妫€娴?GPU锛圢VIDIA CUDA / Apple MPS / 绾?CPU锛夛紝鎹璋冩暣浠ｇ爜鐢熸垚銆乮mport 鍜屽疄楠岃妯?|
+| **馃 OpenCode Beast Mode** | 澶嶆潅瀹為獙鑷姩璺敱鑷?[OpenCode](https://github.com/anomalyco/opencode)鈥斺€旂敓鎴愬鏂囦欢椤圭洰锛屽惈鑷畾涔夋灦鏋勩€佽缁冨惊鐜拰娑堣瀺瀹為獙銆傞€氳繃 `researchclaw setup` 瀹夎銆?|
+| **馃И 娌欑瀹為獙** | AST 楠岃瘉浠ｇ爜銆佷笉鍙彉 harness銆丯aN/Inf 蹇€熷け璐ャ€佽嚜淇銆佽凯浠ｄ紭鍖栵紙鏈€澶?10 杞級銆侀儴鍒嗙粨鏋滄崟鑾?|
+| **馃摑 椤朵細绾у啓浣?* | NeurIPS/ICML/ICLR 妯℃澘锛屽垎娈垫挵鍐欙紙5,000-6,500 璇嶏級锛屽弽鏁版嵁鎹忛€犲畧鍗€佷慨璁㈤暱搴︿繚闅溿€佸弽鍏嶈矗澹版槑寮哄埗 |
+| **馃搻 妯℃澘鍒囨崲** | `neurips_2025`銆乣iclr_2026`銆乣icml_2026` 鈥?Markdown 鈫?LaTeX锛屽惈鏁板鍏紡銆佽〃鏍笺€佸浘鐗囥€佷氦鍙夊紩鐢ㄣ€乣\cite{}` |
+| **馃洝锔?鍙嶆暟鎹崗閫?* | VerifiedRegistry 寮哄埗璁烘枃涓娇鐢ㄧ粡杩囬獙璇佺殑瀹為獙鏁版嵁銆傝嚜鍔ㄨ瘖鏂け璐ュ疄楠屽苟鍦ㄥ啓浣滃墠淇銆傛湭楠岃瘉鏁板瓧琚竻鐞嗐€?|
+| **馃殾 璐ㄩ噺闂ㄦ帶** | 3 涓汉宸ュ鎵归棬鎺э紙闃舵 5銆?銆?0锛夛紝鏀寔鍥炴粴銆傜敤 `--auto-approve` 璺宠繃銆?|
 
 ---
 
-## 🧠 MetaClaw 集成
+## 馃 MetaClaw 闆嗘垚
 
-**AutoResearchClaw + [MetaClaw](https://github.com/aiming-lab/MetaClaw) = 一个能从每次运行中学习的流水线。**
+**AutoResearchClaw + [MetaClaw](https://github.com/aiming-lab/MetaClaw) = 涓€涓兘浠庢瘡娆¤繍琛屼腑瀛︿範鐨勬祦姘寸嚎銆?*
 
-MetaClaw 为 AutoResearchClaw 添加了**跨运行知识迁移**。启用后，流水线会自动从失败和警告中提取教训，将其转化为可复用的技能，并在后续运行中注入到全部 23 个阶段——让同样的错误不再重犯。
+MetaClaw 涓?AutoResearchClaw 娣诲姞浜?*璺ㄨ繍琛岀煡璇嗚縼绉?*銆傚惎鐢ㄥ悗锛屾祦姘寸嚎浼氳嚜鍔ㄤ粠澶辫触鍜岃鍛婁腑鎻愬彇鏁欒锛屽皢鍏惰浆鍖栦负鍙鐢ㄧ殑鎶€鑳斤紝骞跺湪鍚庣画杩愯涓敞鍏ュ埌鍏ㄩ儴 23 涓樁娈碘€斺€旇鍚屾牱鐨勯敊璇笉鍐嶉噸鐘€?
 
-### 工作原理
+### 宸ヤ綔鍘熺悊
 
 ```
-运行 N 执行 → 失败/警告被捕获为 Lessons
-                      ↓
-          MetaClaw Lesson → Skill 转换
-                      ↓
-          arc-* Skill 文件存储在 ~/.metaclaw/skills/
-                      ↓
-运行 N+1 → build_overlay() 将技能注入每个 LLM 提示
-                      ↓
-          LLM 规避已知陷阱 → 更高质量，更少重试
+杩愯 N 鎵ц 鈫?澶辫触/璀﹀憡琚崟鑾蜂负 Lessons
+                      鈫?
+          MetaClaw Lesson 鈫?Skill 杞崲
+                      鈫?
+          arc-* Skill 鏂囦欢瀛樺偍鍦?~/.metaclaw/skills/
+                      鈫?
+杩愯 N+1 鈫?build_overlay() 灏嗘妧鑳芥敞鍏ユ瘡涓?LLM 鎻愮ず
+                      鈫?
+          LLM 瑙勯伩宸茬煡闄烽槺 鈫?鏇撮珮璐ㄩ噺锛屾洿灏戦噸璇?
 ```
 
-### 快速配置
+### 蹇€熼厤缃?
 
 ```bash
-# 1. 安装 MetaClaw（如未安装）
+# 1. 瀹夎 MetaClaw锛堝鏈畨瑁咃級
 pip install metaclaw
 
-# 2. 在配置中启用
+# 2. 鍦ㄩ厤缃腑鍚敤
 ```
 
 ```yaml
 # config.arc.yaml
 metaclaw_bridge:
   enabled: true
-  proxy_url: "http://localhost:30000"        # MetaClaw 代理（可选）
-  skills_dir: "~/.metaclaw/skills"          # 技能存储位置
-  fallback_url: "https://api.openai.com/v1" # 直连 LLM 回退
-  fallback_api_key: ""                      # 回退 URL 的 API key
+  proxy_url: "http://localhost:30000"        # MetaClaw 浠ｇ悊锛堝彲閫夛級
+  skills_dir: "~/.metaclaw/skills"          # 鎶€鑳藉瓨鍌ㄤ綅缃?
+  fallback_url: "https://api.openai.com/v1" # 鐩磋繛 LLM 鍥為€€
+  fallback_api_key: ""                      # 鍥為€€ URL 鐨?API key
   lesson_to_skill:
     enabled: true
-    min_severity: "warning"                 # 转换 warning + error
+    min_severity: "warning"                 # 杞崲 warning + error
     max_skills_per_run: 3
 ```
 
 ```bash
-# 3. 照常运行 — MetaClaw 透明运作
+# 3. 鐓у父杩愯 鈥?MetaClaw 閫忔槑杩愪綔
 researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
 ```
 
-每次运行后，查看 `~/.metaclaw/skills/arc-*/SKILL.md` 以了解流水线学到了哪些技能。
+姣忔杩愯鍚庯紝鏌ョ湅 `~/.metaclaw/skills/arc-*/SKILL.md` 浠ヤ簡瑙ｆ祦姘寸嚎瀛﹀埌浜嗗摢浜涙妧鑳姐€?
 
-### 实验结果
+### 瀹為獙缁撴灉
 
-在对照 A/B 实验中（相同主题、相同 LLM、相同配置）：
+鍦ㄥ鐓?A/B 瀹為獙涓紙鐩稿悓涓婚銆佺浉鍚?LLM銆佺浉鍚岄厤缃級锛?
 
-| 指标 | 基线 | 使用 MetaClaw | 改善 |
+| 鎸囨爣 | 鍩虹嚎 | 浣跨敤 MetaClaw | 鏀瑰杽 |
 |------|------|---------------|------|
-| 阶段重试率 | 10.5% | 7.9% | **-24.8%** |
-| Refine 循环次数 | 2.0 | 1.2 | **-40.0%** |
-| 流水线阶段完成率 | 18/19 | 19/19 | **+5.3%** |
-| 整体鲁棒性得分（综合） | 0.714 | 0.845 | **+18.3%** |
+| 闃舵閲嶈瘯鐜?| 10.5% | 7.9% | **-24.8%** |
+| Refine 寰幆娆℃暟 | 2.0 | 1.2 | **-40.0%** |
+| 娴佹按绾块樁娈靛畬鎴愮巼 | 18/19 | 19/19 | **+5.3%** |
+| 鏁翠綋椴佹鎬у緱鍒嗭紙缁煎悎锛?| 0.714 | 0.845 | **+18.3%** |
 
-> 综合鲁棒性得分是阶段完成率（40%）、重试减少（30%）和 Refine 循环效率（30%）的加权平均。
+> 缁煎悎椴佹鎬у緱鍒嗘槸闃舵瀹屾垚鐜囷紙40%锛夈€侀噸璇曞噺灏戯紙30%锛夊拰 Refine 寰幆鏁堢巼锛?0%锛夌殑鍔犳潈骞冲潎銆?
 
-### 向后兼容性
+### 鍚戝悗鍏煎鎬?
 
-- **默认：关闭。** 如果 `metaclaw_bridge` 不存在或 `enabled: false`，流水线行为与之前完全一致。
-- **无新依赖。** MetaClaw 是可选的——核心流水线无需它即可运行。
-- **所有 1,823 项现有测试通过**（包含集成代码）。
+- **榛樿锛氬叧闂€?* 濡傛灉 `metaclaw_bridge` 涓嶅瓨鍦ㄦ垨 `enabled: false`锛屾祦姘寸嚎琛屼负涓庝箣鍓嶅畬鍏ㄤ竴鑷淬€?
+- **鏃犳柊渚濊禆銆?* MetaClaw 鏄彲閫夌殑鈥斺€旀牳蹇冩祦姘寸嚎鏃犻渶瀹冨嵆鍙繍琛屻€?
+- **鎵€鏈?1,823 椤圭幇鏈夋祴璇曢€氳繃**锛堝寘鍚泦鎴愪唬鐮侊級銆?
 
 ---
 
-## ⚙️ 配置参考
+## 鈿欙笍 閰嶇疆鍙傝€?
 
 <details>
-<summary>点击展开完整配置参考</summary>
+<summary>鐐瑰嚮灞曞紑瀹屾暣閰嶇疆鍙傝€?/summary>
 
 ```yaml
-# === 项目 ===
+# === 椤圭洰 ===
 project:
-  name: "my-research"              # 项目标识符
+  name: "my-research"              # 椤圭洰鏍囪瘑绗?
   mode: "docs-first"               # docs-first | semi-auto | full-auto
 
-# === 研究 ===
+# === 鐮旂┒ ===
 research:
-  topic: "..."                     # 研究主题（必填）
-  domains: ["ml", "nlp"]           # 文献搜索的研究领域
-  daily_paper_count: 8             # 每个搜索查询的目标论文数
-  quality_threshold: 4.0           # 论文最低质量分
+  topic: "..."                     # 鐮旂┒涓婚锛堝繀濉級
+  domains: ["ml", "nlp"]           # 鏂囩尞鎼滅储鐨勭爺绌堕鍩?
+  daily_paper_count: 8             # 姣忎釜鎼滅储鏌ヨ鐨勭洰鏍囪鏂囨暟
+  quality_threshold: 4.0           # 璁烘枃鏈€浣庤川閲忓垎
 
-# === 运行时 ===
+# === 杩愯鏃?===
 runtime:
-  timezone: "America/New_York"     # 用于时间戳
-  max_parallel_tasks: 3            # 并发实验限制
-  approval_timeout_hours: 12       # 门控阶段超时
-  retry_limit: 2                   # 阶段失败重试次数
+  timezone: "America/New_York"     # 鐢ㄤ簬鏃堕棿鎴?
+  max_parallel_tasks: 3            # 骞跺彂瀹為獙闄愬埗
+  approval_timeout_hours: 12       # 闂ㄦ帶闃舵瓒呮椂
+  retry_limit: 2                   # 闃舵澶辫触閲嶈瘯娆℃暟
 
 # === LLM ===
 llm:
   provider: "openai-compatible"    # openai | openrouter | deepseek | minimax | acp | openai-compatible
-  base_url: "https://..."          # API 端点（openai-compatible 必填）
-  api_key_env: "OPENAI_API_KEY"    # API key 环境变量（openai-compatible 必填）
-  api_key: ""                      # 或直接填写 key
-  primary_model: "gpt-4o"          # 主模型
-  fallback_models: ["gpt-4o-mini"] # 回退链
-  s2_api_key: ""                   # Semantic Scholar API key（可选，更高速率限制）
-  acp:                             # 仅在 provider: "acp" 时使用
-    agent: "claude"                # ACP Agent CLI 命令（claude, codex, gemini 等）
-    cwd: "."                       # Agent 的工作目录
+  base_url: "https://..."          # API 绔偣锛坥penai-compatible 蹇呭～锛?
+  api_key_env: "OPENAI_API_KEY"    # API key 鐜鍙橀噺锛坥penai-compatible 蹇呭～锛?
+  api_key: ""                      # 鎴栫洿鎺ュ～鍐?key
+  primary_model: "gpt-4o"          # 涓绘ā鍨?
+  fallback_models: ["gpt-4o-mini"] # 鍥為€€閾?
+  s2_api_key: ""                   # Semantic Scholar API key锛堝彲閫夛紝鏇撮珮閫熺巼闄愬埗锛?
+  acp:                             # 浠呭湪 provider: "acp" 鏃朵娇鐢?
+    agent: "claude"                # ACP Agent CLI 鍛戒护锛坈laude, codex, gemini 绛夛級
+    cwd: "."                       # Agent 鐨勫伐浣滅洰褰?
 
-# === 实验 ===
+# === 瀹為獙 ===
 experiment:
   mode: "sandbox"                  # simulated | sandbox | docker | ssh_remote
-  time_budget_sec: 300             # 每次运行最大执行时间（默认：300 秒）
-  max_iterations: 10               # 最大优化迭代次数
-  metric_key: "val_loss"           # 主指标名称
+  time_budget_sec: 300             # 姣忔杩愯鏈€澶ф墽琛屾椂闂达紙榛樿锛?00 绉掞級
+  max_iterations: 10               # 鏈€澶т紭鍖栬凯浠ｆ鏁?
+  metric_key: "val_loss"           # 涓绘寚鏍囧悕绉?
   metric_direction: "minimize"     # minimize | maximize
   sandbox:
     python_path: ".venv/bin/python"
@@ -447,57 +447,57 @@ experiment:
     network_policy: "setup_only"   # none | setup_only | pip_only | full
     gpu_enabled: true
     memory_limit_mb: 8192
-    auto_install_deps: true        # 自动检测 import → requirements.txt
+    auto_install_deps: true        # 鑷姩妫€娴?import 鈫?requirements.txt
   ssh_remote:
-    host: ""                       # GPU 服务器主机名
-    gpu_ids: []                    # 可用 GPU ID
+    host: ""                       # GPU 鏈嶅姟鍣ㄤ富鏈哄悕
+    gpu_ids: []                    # 鍙敤 GPU ID
     remote_workdir: "/tmp/researchclaw_experiments"
-  opencode:                          # OpenCode Beast Mode（通过 `researchclaw setup` 自动安装）
-    enabled: true                    # 主开关（默认：true）
-    auto: true                       # 无需确认自动触发（默认：true）
-    complexity_threshold: 0.2        # 0.0-1.0 — 越高 = 仅在复杂实验时触发
-    model: ""                        # 覆盖模型（空 = 使用 llm.primary_model）
-    timeout_sec: 600                 # OpenCode 生成最大秒数
-    max_retries: 1                   # 失败重试次数
-    workspace_cleanup: true          # 采集后清理临时工作区
-  code_agent:                        # CodeAgent v2 — 多阶段代码生成
-    enabled: true                    # 使用 CodeAgent 替代传统单 prompt 代码生成
-    architecture_planning: true      # 生成代码前先生成深度实现蓝图
-    sequential_generation: true      # 按依赖 DAG 逐文件生成
-    hard_validation: true            # 基于 AST 的验证门控（拦截相同消融、硬编码指标）
-    hard_validation_max_repairs: 2   # 验证失败时最大修复次数
-    exec_fix_max_iterations: 3       # 执行修复循环最大次数
-    exec_fix_timeout_sec: 60         # 每次执行修复超时（秒）
-  benchmark_agent:                   # BenchmarkAgent — 自动数据集和基线选择
-    enabled: true                    # 启用 4-agent 基准测试流水线（Surveyor→Selector→Acquirer→Validator）
-    enable_hf_search: true           # 搜索 HuggingFace Datasets
-    enable_web_search: true          # 搜索 Google Scholar 获取基准
-    tier_limit: 2                    # 数据集级别过滤（1=小型/已缓存，2=中型，3=大型）
-    min_benchmarks: 1                # 最少需要的数据集数量
-    min_baselines: 2                 # 最少需要的基线方法数量
-  figure_agent:                      # FigureAgent — 学术图表生成
-    enabled: true                    # 启用 5-agent 图表流水线（Planner→CodeGen→Renderer→Critic→Integrator）
-    min_figures: 3                   # 最少生成图表数
-    max_figures: 8                   # 最多生成图表数
-    max_iterations: 3                # Critic 驱动的迭代优化次数
-    dpi: 300                         # 输出分辨率
-    strict_mode: false               # 图表生成失败时是否阻塞流水线
-  repair:                            # 反数据捏造实验修复
-    enabled: true                    # 自动诊断并修复失败的实验
-    max_cycles: 3                    # 修复重试循环数
-    min_completion_rate: 0.5         # >=50% 条件必须完成才可继续
-    min_conditions: 2                # 有效实验至少需要 2 个条件
-    use_opencode: true               # 通过 OpenCode Beast Mode 进行修复
+  opencode:                          # OpenCode Beast Mode锛堥€氳繃 `researchclaw setup` 鑷姩瀹夎锛?
+    enabled: true                    # 涓诲紑鍏筹紙榛樿锛歵rue锛?
+    auto: true                       # 鏃犻渶纭鑷姩瑙﹀彂锛堥粯璁わ細true锛?
+    complexity_threshold: 0.2        # 0.0-1.0 鈥?瓒婇珮 = 浠呭湪澶嶆潅瀹為獙鏃惰Е鍙?
+    model: ""                        # 瑕嗙洊妯″瀷锛堢┖ = 浣跨敤 llm.primary_model锛?
+    timeout_sec: 600                 # OpenCode 鐢熸垚鏈€澶х鏁?
+    max_retries: 1                   # 澶辫触閲嶈瘯娆℃暟
+    workspace_cleanup: true          # 閲囬泦鍚庢竻鐞嗕复鏃跺伐浣滃尯
+  code_agent:                        # CodeAgent v2 鈥?澶氶樁娈典唬鐮佺敓鎴?
+    enabled: true                    # 浣跨敤 CodeAgent 鏇夸唬浼犵粺鍗?prompt 浠ｇ爜鐢熸垚
+    architecture_planning: true      # 鐢熸垚浠ｇ爜鍓嶅厛鐢熸垚娣卞害瀹炵幇钃濆浘
+    sequential_generation: true      # 鎸変緷璧?DAG 閫愭枃浠剁敓鎴?
+    hard_validation: true            # 鍩轰簬 AST 鐨勯獙璇侀棬鎺э紙鎷︽埅鐩稿悓娑堣瀺銆佺‖缂栫爜鎸囨爣锛?
+    hard_validation_max_repairs: 2   # 楠岃瘉澶辫触鏃舵渶澶т慨澶嶆鏁?
+    exec_fix_max_iterations: 3       # 鎵ц淇寰幆鏈€澶ф鏁?
+    exec_fix_timeout_sec: 60         # 姣忔鎵ц淇瓒呮椂锛堢锛?
+  benchmark_agent:                   # BenchmarkAgent 鈥?鑷姩鏁版嵁闆嗗拰鍩虹嚎閫夋嫨
+    enabled: true                    # 鍚敤 4-agent 鍩哄噯娴嬭瘯娴佹按绾匡紙Surveyor鈫扴elector鈫扐cquirer鈫扸alidator锛?
+    enable_hf_search: true           # 鎼滅储 HuggingFace Datasets
+    enable_web_search: true          # 鎼滅储 Google Scholar 鑾峰彇鍩哄噯
+    tier_limit: 2                    # 鏁版嵁闆嗙骇鍒繃婊わ紙1=灏忓瀷/宸茬紦瀛橈紝2=涓瀷锛?=澶у瀷锛?
+    min_benchmarks: 1                # 鏈€灏戦渶瑕佺殑鏁版嵁闆嗘暟閲?
+    min_baselines: 2                 # 鏈€灏戦渶瑕佺殑鍩虹嚎鏂规硶鏁伴噺
+  figure_agent:                      # FigureAgent 鈥?瀛︽湳鍥捐〃鐢熸垚
+    enabled: true                    # 鍚敤 5-agent 鍥捐〃娴佹按绾匡紙Planner鈫扖odeGen鈫扲enderer鈫扖ritic鈫扞ntegrator锛?
+    min_figures: 3                   # 鏈€灏戠敓鎴愬浘琛ㄦ暟
+    max_figures: 8                   # 鏈€澶氱敓鎴愬浘琛ㄦ暟
+    max_iterations: 3                # Critic 椹卞姩鐨勮凯浠ｄ紭鍖栨鏁?
+    dpi: 300                         # 杈撳嚭鍒嗚鲸鐜?
+    strict_mode: false               # 鍥捐〃鐢熸垚澶辫触鏃舵槸鍚﹂樆濉炴祦姘寸嚎
+  repair:                            # 鍙嶆暟鎹崗閫犲疄楠屼慨澶?
+    enabled: true                    # 鑷姩璇婃柇骞朵慨澶嶅け璐ョ殑瀹為獙
+    max_cycles: 3                    # 淇閲嶈瘯寰幆鏁?
+    min_completion_rate: 0.5         # >=50% 鏉′欢蹇呴』瀹屾垚鎵嶅彲缁х画
+    min_conditions: 2                # 鏈夋晥瀹為獙鑷冲皯闇€瑕?2 涓潯浠?
+    use_opencode: true               # 閫氳繃 OpenCode Beast Mode 杩涜淇
 
-# === 网络搜索（可选）===
+# === 缃戠粶鎼滅储锛堝彲閫夛級===
 web_search:
-  enabled: true                      # 启用网络增强文献搜索
-  tavily_api_key_env: "TAVILY_API_KEY"  # Tavily API key 环境变量（可选）
-  enable_scholar: true               # Google Scholar 搜索
-  enable_pdf_extraction: true        # 从 PDF 中提取文本
-  max_web_results: 10                # 每次查询最大网络结果数
+  enabled: true                      # 鍚敤缃戠粶澧炲己鏂囩尞鎼滅储
+  tavily_api_key_env: "TAVILY_API_KEY"  # Tavily API key 鐜鍙橀噺锛堝彲閫夛級
+  enable_scholar: true               # Google Scholar 鎼滅储
+  enable_pdf_extraction: true        # 浠?PDF 涓彁鍙栨枃鏈?
+  max_web_results: 10                # 姣忔鏌ヨ鏈€澶х綉缁滅粨鏋滄暟
 
-# === 导出 ===
+# === 瀵煎嚭 ===
 export:
   target_conference: "neurips_2025"  # neurips_2025 | iclr_2026 | icml_2026
   authors: "Anonymous"
@@ -505,74 +505,74 @@ export:
 
 # === Prompts ===
 prompts:
-  custom_file: ""                  # 自定义 Prompt YAML 路径（空 = 使用默认）
+  custom_file: ""                  # 鑷畾涔?Prompt YAML 璺緞锛堢┖ = 浣跨敤榛樿锛?
 
-# === 安全 ===
+# === 瀹夊叏 ===
 security:
-  hitl_required_stages: [5, 9, 20] # 需要人工审批的阶段
+  hitl_required_stages: [5, 9, 20] # 闇€瑕佷汉宸ュ鎵圭殑闃舵
   allow_publish_without_approval: false
   redact_sensitive_logs: true
 
-# === 知识库 ===
+# === 鐭ヨ瘑搴?===
 knowledge_base:
   backend: "markdown"              # markdown | obsidian
   root: "docs/kb"
 
-# === 通知 ===
+# === 閫氱煡 ===
 notifications:
   channel: "console"               # console | discord | slack
   target: ""
 
-# === MetaClaw Bridge（可选）===
+# === MetaClaw Bridge锛堝彲閫夛級===
 metaclaw_bridge:
-  enabled: false                   # 设为 true 以启用跨运行学习
-  proxy_url: "http://localhost:30000"  # MetaClaw 代理 URL
-  skills_dir: "~/.metaclaw/skills" # arc-* 技能的存储位置
-  fallback_url: ""                 # 代理不可用时的直连 LLM 回退
-  fallback_api_key: ""             # 回退端点的 API key
+  enabled: false                   # 璁句负 true 浠ュ惎鐢ㄨ法杩愯瀛︿範
+  proxy_url: "http://localhost:30000"  # MetaClaw 浠ｇ悊 URL
+  skills_dir: "~/.metaclaw/skills" # arc-* 鎶€鑳界殑瀛樺偍浣嶇疆
+  fallback_url: ""                 # 浠ｇ悊涓嶅彲鐢ㄦ椂鐨勭洿杩?LLM 鍥為€€
+  fallback_api_key: ""             # 鍥為€€绔偣鐨?API key
   lesson_to_skill:
-    enabled: true                  # 自动将教训转换为技能
-    min_severity: "warning"        # 转换的最低严重级别
-    max_skills_per_run: 3          # 每次流水线运行的最大新技能数
-  prm:                             # 过程奖励模型质量门控（可选）
-    enabled: false                 # 使用 LLM-as-judge 评分阶段产出
-    model: "gpt-5.4"              # PRM 评判模型
-    votes: 3                       # 多数投票次数
-    gate_stages: [5, 9, 15, 20]   # 应用 PRM 门控的阶段
+    enabled: true                  # 鑷姩灏嗘暀璁浆鎹负鎶€鑳?
+    min_severity: "warning"        # 杞崲鐨勬渶浣庝弗閲嶇骇鍒?
+    max_skills_per_run: 3          # 姣忔娴佹按绾胯繍琛岀殑鏈€澶ф柊鎶€鑳芥暟
+  prm:                             # 杩囩▼濂栧姳妯″瀷璐ㄩ噺闂ㄦ帶锛堝彲閫夛級
+    enabled: false                 # 浣跨敤 LLM-as-judge 璇勫垎闃舵浜у嚭
+    model: "gpt-5.4"              # PRM 璇勫垽妯″瀷
+    votes: 3                       # 澶氭暟鎶曠エ娆℃暟
+    gate_stages: [5, 9, 15, 20]   # 搴旂敤 PRM 闂ㄦ帶鐨勯樁娈?
 
 # === OpenClaw Bridge ===
 openclaw_bridge:
-  use_cron: false                  # 定时研究运行
-  use_message: false               # 进度通知
-  use_memory: false                # 跨会话知识持久化
-  use_sessions_spawn: false        # 派生并行子会话
-  use_web_fetch: false             # 实时网络搜索
-  use_browser: false               # 基于浏览器的论文采集
+  use_cron: false                  # 瀹氭椂鐮旂┒杩愯
+  use_message: false               # 杩涘害閫氱煡
+  use_memory: false                # 璺ㄤ細璇濈煡璇嗘寔涔呭寲
+  use_sessions_spawn: false        # 娲剧敓骞惰瀛愪細璇?
+  use_web_fetch: false             # 瀹炴椂缃戠粶鎼滅储
+  use_browser: false               # 鍩轰簬娴忚鍣ㄧ殑璁烘枃閲囬泦
 ```
 
 </details>
 
 ---
 
-## 🙏 致谢
+## 馃檹 鑷磋阿
 
-灵感来源：
+鐏垫劅鏉ユ簮锛?
 
-- 🔬 [AI Scientist](https://github.com/SakanaAI/AI-Scientist)（Sakana AI）— 自动化研究先驱
-- 🧠 [AutoResearch](https://github.com/karpathy/autoresearch)（Andrej Karpathy）— 端到端研究自动化
-- 🌐 [FARS](https://analemma.ai/blog/introducing-fars/)（Analemma）— 全自动研究系统
-
----
-
-## 📄 许可证
-
-MIT — 详见 [LICENSE](../LICENSE)。
+- 馃敩 [AI Scientist](https://github.com/SakanaAI/AI-Scientist)锛圫akana AI锛夆€?鑷姩鍖栫爺绌跺厛椹?
+- 馃 [AutoResearch](https://github.com/karpathy/autoresearch)锛圓ndrej Karpathy锛夆€?绔埌绔爺绌惰嚜鍔ㄥ寲
+- 馃寪 [FARS](https://analemma.ai/blog/introducing-fars/)锛圓nalemma锛夆€?鍏ㄨ嚜鍔ㄧ爺绌剁郴缁?
 
 ---
 
-## 📌 引用
+## 馃搫 璁稿彲璇?
 
-如果你觉得 AutoResearchClaw 有用，请引用：
+MIT 鈥?璇﹁ [LICENSE](../LICENSE)銆?
+
+---
+
+## 馃搶 寮曠敤
+
+濡傛灉浣犺寰?AutoResearchClaw 鏈夌敤锛岃寮曠敤锛?
 
 ```bibtex
 @misc{liu2026autoresearchclaw,
@@ -580,10 +580,10 @@ MIT — 详见 [LICENSE](../LICENSE)。
   title        = {AutoResearchClaw: Fully Autonomous Research from Idea to Paper},
   year         = {2026},
   organization = {GitHub},
-  url          = {https://github.com/aiming-lab/AutoResearchClaw},
+  url          = {https://github.com/MikaelCool/My-Own-PhD-Students},
 }
 ```
 
 <p align="center">
-  <sub>Built with 🦞 by the AutoResearchClaw team</sub>
+  <sub>Built with 馃 by the AutoResearchClaw team</sub>
 </p>

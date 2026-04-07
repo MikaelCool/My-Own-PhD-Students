@@ -1,6 +1,6 @@
 # AutoResearchClaw Integration Guide
 
-> **The simplest way to use AutoResearchClaw**: give the repo URL to [OpenClaw](https://github.com/openclaw/openclaw) and say *"Research [your topic]."* That's it — OpenClaw handles cloning, installing, configuring, and running the entire 23-stage pipeline for you.
+> **The simplest way to use AutoResearchClaw**: give the repo URL to [OpenClaw](https://github.com/openclaw/openclaw) and say *"Research [your topic]."* That's it 鈥?OpenClaw handles cloning, installing, configuring, and running the entire 23-stage pipeline for you.
 
 This guide is for humans who want to understand what's happening under the hood, or who prefer to set things up manually.
 
@@ -33,9 +33,9 @@ If you use [OpenClaw](https://github.com/openclaw/openclaw) as your AI assistant
 
 1. Share the GitHub repo URL with OpenClaw:
    ```
-   https://github.com/aiming-lab/AutoResearchClaw
+   https://github.com/MikaelCool/My-Own-PhD-Students
    ```
-2. OpenClaw reads `RESEARCHCLAW_AGENTS.md` and `README.md` — it now understands the entire system.
+2. OpenClaw reads `RESEARCHCLAW_AGENTS.md` and `README.md` 鈥?it now understands the entire system.
    > **Note:** `RESEARCHCLAW_AGENTS.md` is generated locally and listed in `.gitignore`. If it doesn't exist, OpenClaw can bootstrap from `README.md` and the project structure.
 3. Say something like:
    ```
@@ -44,7 +44,7 @@ If you use [OpenClaw](https://github.com/openclaw/openclaw) as your AI assistant
 4. OpenClaw will:
    - Clone the repo
    - Create a virtual environment and install dependencies (`pip install -e .`)
-   - Copy `config.researchclaw.example.yaml` → `config.yaml`
+   - Copy `config.researchclaw.example.yaml` 鈫?`config.yaml`
    - Ask you for an OpenAI API key (or use your environment variable)
    - Run the full 23-stage pipeline
    - Return the paper, experiment code, charts, and citations
@@ -79,8 +79,8 @@ OpenClaw will modify `config.yaml` accordingly before running the pipeline.
 
 ```bash
 # Clone the repository
-git clone https://github.com/aiming-lab/AutoResearchClaw.git
-cd AutoResearchClaw
+git clone https://github.com/MikaelCool/My-Own-PhD-Students.git
+cd My-Own-PhD-Students
 
 # Create a virtual environment (recommended)
 python3 -m venv .venv
@@ -175,9 +175,9 @@ experiment:
   code_agent:                        # CodeAgent v2 (multi-phase code generation)
     enabled: true                    # Architecture planning + sequential file gen + hard validation
   benchmark_agent:                   # Automated dataset & baseline selection
-    enabled: true                    # 4-agent pipeline: Surveyor→Selector→Acquirer→Validator
+    enabled: true                    # 4-agent pipeline: Surveyor鈫扴elector鈫扐cquirer鈫扸alidator
   figure_agent:                      # Academic figure generation
-    enabled: true                    # 5-agent pipeline: Planner→CodeGen→Renderer→Critic→Integrator
+    enabled: true                    # 5-agent pipeline: Planner鈫扖odeGen鈫扲enderer鈫扖ritic鈫扞ntegrator
   repair:                            # Anti-fabrication experiment repair
     enabled: true                    # Diagnose and fix failed experiments before paper writing
     max_cycles: 3                    # Repair retry loops
@@ -263,7 +263,7 @@ researchclaw run --config config.yaml --topic "Transformer attention for time se
 ### Examples
 
 ```bash
-# Full autonomous run — no human intervention
+# Full autonomous run 鈥?no human intervention
 researchclaw run -c config.yaml -t "Graph neural networks for protein folding" --auto-approve
 
 # Resume a failed run from where it stopped
@@ -365,44 +365,44 @@ Each run creates a timestamped directory under `artifacts/`:
 
 ```
 artifacts/rc-20260310-143200-a1b2c3/
-├── stage-1/goal.md                        # Research goal
-├── stage-2/problem_tree.md                # Problem decomposition
-├── stage-3/search_plan.yaml               # Search strategy
-├── stage-4/candidates.jsonl               # Raw literature results
-├── stage-5/shortlist.jsonl                # Screened papers
-├── stage-6/cards/                         # Knowledge cards (one per paper)
-├── stage-7/synthesis.md                   # Research gap analysis
-├── stage-8/hypotheses.md                  # Research hypotheses
-├── stage-9/exp_plan.yaml                  # Experiment plan
-├── stage-10/experiment.py                 # Generated experiment code
-├── stage-10/experiment_spec.md            # Experiment specification
-├── stage-11/schedule.json                 # Resource schedule
-├── stage-12/runs/run-1.json               # Experiment results
-├── stage-13/experiment_final.py           # Refined experiment code
-├── stage-13/experiment_v1.py              # Iteration 1 snapshot
-├── stage-13/refinement_log.json           # Refinement history
-├── stage-14/analysis.md                   # Statistical analysis
-├── stage-14/experiment_summary.json       # Metrics summary
-├── stage-15/decision.md                   # Proceed/Pivot decision
-├── stage-16/outline.md                    # Paper outline
-├── stage-17/paper_draft.md                # Full paper draft
-├── stage-18/reviews.md                    # Simulated peer reviews
-├── stage-19/paper_revised.md              # Revised paper
-├── stage-20/quality_report.json           # Quality assessment
-├── stage-21/archive.md                    # Knowledge retrospective
-├── stage-22/
-│   ├── paper_final.md                     # Final paper (Markdown)
-│   ├── paper.tex                          # Conference-ready LaTeX
-│   ├── references.bib                     # BibTeX references
-│   ├── charts/                            # Result visualizations
-│   └── code/                              # Open-source code package
-│       ├── experiment.py
-│       ├── requirements.txt
-│       └── README.md
-├── stage-23/
-│   ├── verification_report.json           # Citation fact-check results
-│   └── references_verified.bib            # Cleaned bibliography
-└── pipeline_summary.json                  # Overall execution summary
+鈹溾攢鈹€ stage-1/goal.md                        # Research goal
+鈹溾攢鈹€ stage-2/problem_tree.md                # Problem decomposition
+鈹溾攢鈹€ stage-3/search_plan.yaml               # Search strategy
+鈹溾攢鈹€ stage-4/candidates.jsonl               # Raw literature results
+鈹溾攢鈹€ stage-5/shortlist.jsonl                # Screened papers
+鈹溾攢鈹€ stage-6/cards/                         # Knowledge cards (one per paper)
+鈹溾攢鈹€ stage-7/synthesis.md                   # Research gap analysis
+鈹溾攢鈹€ stage-8/hypotheses.md                  # Research hypotheses
+鈹溾攢鈹€ stage-9/exp_plan.yaml                  # Experiment plan
+鈹溾攢鈹€ stage-10/experiment.py                 # Generated experiment code
+鈹溾攢鈹€ stage-10/experiment_spec.md            # Experiment specification
+鈹溾攢鈹€ stage-11/schedule.json                 # Resource schedule
+鈹溾攢鈹€ stage-12/runs/run-1.json               # Experiment results
+鈹溾攢鈹€ stage-13/experiment_final.py           # Refined experiment code
+鈹溾攢鈹€ stage-13/experiment_v1.py              # Iteration 1 snapshot
+鈹溾攢鈹€ stage-13/refinement_log.json           # Refinement history
+鈹溾攢鈹€ stage-14/analysis.md                   # Statistical analysis
+鈹溾攢鈹€ stage-14/experiment_summary.json       # Metrics summary
+鈹溾攢鈹€ stage-15/decision.md                   # Proceed/Pivot decision
+鈹溾攢鈹€ stage-16/outline.md                    # Paper outline
+鈹溾攢鈹€ stage-17/paper_draft.md                # Full paper draft
+鈹溾攢鈹€ stage-18/reviews.md                    # Simulated peer reviews
+鈹溾攢鈹€ stage-19/paper_revised.md              # Revised paper
+鈹溾攢鈹€ stage-20/quality_report.json           # Quality assessment
+鈹溾攢鈹€ stage-21/archive.md                    # Knowledge retrospective
+鈹溾攢鈹€ stage-22/
+鈹?  鈹溾攢鈹€ paper_final.md                     # Final paper (Markdown)
+鈹?  鈹溾攢鈹€ paper.tex                          # Conference-ready LaTeX
+鈹?  鈹溾攢鈹€ references.bib                     # BibTeX references
+鈹?  鈹溾攢鈹€ charts/                            # Result visualizations
+鈹?  鈹斺攢鈹€ code/                              # Open-source code package
+鈹?      鈹溾攢鈹€ experiment.py
+鈹?      鈹溾攢鈹€ requirements.txt
+鈹?      鈹斺攢鈹€ README.md
+鈹溾攢鈹€ stage-23/
+鈹?  鈹溾攢鈹€ verification_report.json           # Citation fact-check results
+鈹?  鈹斺攢鈹€ references_verified.bib            # Cleaned bibliography
+鈹斺攢鈹€ pipeline_summary.json                  # Overall execution summary
 ```
 
 ### Key Output Files
@@ -445,7 +445,7 @@ experiment:
     max_memory_mb: 4096
 ```
 
-The pipeline **generates Python code and actually runs it** in a subprocess. The code is validated before execution (AST parsing, import whitelist, no file I/O outside sandbox). **Hardware-aware**: Stage 1 auto-detects your GPU (NVIDIA CUDA / Apple MPS / CPU-only) and adapts the generated code accordingly — high-tier GPUs get full PyTorch code, limited GPUs get lightweight experiments, CPU-only gets NumPy/sklearn only.
+The pipeline **generates Python code and actually runs it** in a subprocess. The code is validated before execution (AST parsing, import whitelist, no file I/O outside sandbox). **Hardware-aware**: Stage 1 auto-detects your GPU (NVIDIA CUDA / Apple MPS / CPU-only) and adapts the generated code accordingly 鈥?high-tier GPUs get full PyTorch code, limited GPUs get lightweight experiments, CPU-only gets NumPy/sklearn only.
 
 **Best for**: Real experiments on your local machine. Supports numpy and stdlib; deep learning frameworks (torch, tensorflow) are available if installed in your environment and GPU is detected.
 
@@ -475,10 +475,10 @@ The pipeline runs generated code inside a **Docker container** with GPU passthro
 3. **Phase 2 (experiment)**: Executes the experiment code (network disabled by default via iptables)
 
 **Network policies**:
-- `none` — No network at all (all phases offline). Requires all deps pre-installed in image.
-- `setup_only` (default) — Network during Phase 0+1, disabled before Phase 2 via iptables (`--cap-add=NET_ADMIN`).
-- `pip_only` — Network only during Phase 0 (pip install), disabled for Phase 1+2.
-- `full` — Network available throughout all phases.
+- `none` 鈥?No network at all (all phases offline). Requires all deps pre-installed in image.
+- `setup_only` (default) 鈥?Network during Phase 0+1, disabled before Phase 2 via iptables (`--cap-add=NET_ADMIN`).
+- `pip_only` 鈥?Network only during Phase 0 (pip install), disabled for Phase 1+2.
+- `full` 鈥?Network available throughout all phases.
 
 **Pre-cached datasets**: The Docker image includes CIFAR-10/100, MNIST, FashionMNIST, STL-10, and SVHN at `/opt/datasets`, mounted read-only as `/workspace/data`. No download needed for these standard benchmarks.
 
@@ -524,7 +524,7 @@ export:
 | ICML 2026 | `icml_2026` | Double-column, `icml2026` style |
 | ICML 2025 | `icml_2025` | Double-column, `icml2025` style |
 
-Short aliases are also accepted: `neurips` (→ 2025), `iclr` (→ 2026), `icml` (→ 2026).
+Short aliases are also accepted: `neurips` (鈫?2025), `iclr` (鈫?2026), `icml` (鈫?2026).
 
 The Markdown-to-LaTeX converter handles:
 - Section headings (`#`, `##`, `###`)
@@ -533,7 +533,7 @@ The Markdown-to-LaTeX converter handles:
 - Ordered and unordered lists
 - Tables
 - Code blocks
-- Citation references (`[cite_key]` → `\cite{cite_key}`)
+- Citation references (`[cite_key]` 鈫?`\cite{cite_key}`)
 
 ### Compiling the LaTeX
 
@@ -578,7 +578,7 @@ openclaw_bridge:
 
 When OpenClaw provides a capability (e.g., message sending), the adapter consumes it automatically. When running standalone, recording stubs capture all calls for debugging without side effects.
 
-This is an **extension point** — you don't need to configure it for basic usage.
+This is an **extension point** 鈥?you don't need to configure it for basic usage.
 
 ---
 
@@ -589,36 +589,36 @@ This is an **extension point** — you don't need to configure it for basic usag
 ### Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│              AutoResearchClaw Pipeline                │
-│  Stage 1 → 2 → ... → 23                             │
-│                                                      │
-│  ┌─────────────┐    ┌──────────────────────────────┐ │
-│  │ LLMClient   │───▶│ MetaClaw Integration Layer   │ │
-│  │             │    │ (metaclaw_bridge module)      │ │
-│  └─────────────┘    └──────────┬───────────────────┘ │
-│                                │                     │
-│  ┌─────────────┐    ┌──────────▼───────────────────┐ │
-│  │ Evolution   │◀──▶│ Lesson ↔ Skill Bridge        │ │
-│  │ Store       │    └─────────────────────────────┘ │
-│  └─────────────┘                                     │
-└──────────────────────────┬───────────────────────────┘
-                           │
-            ┌──────────────▼──────────────┐
-            │     MetaClaw Proxy Server    │
-            │     (optional, :30000)       │
-            │  ┌────────────────────────┐  │
-            │  │ SkillManager (40+ skills)│ │
-            │  │ + arc-* learned skills   │ │
-            │  └────────────────────────┘  │
-            └─────────────────────────────┘
+鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
+鈹?             AutoResearchClaw Pipeline                鈹?
+鈹? Stage 1 鈫?2 鈫?... 鈫?23                             鈹?
+鈹?                                                     鈹?
+鈹? 鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?   鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?
+鈹? 鈹?LLMClient   鈹傗攢鈹€鈹€鈻垛攤 MetaClaw Integration Layer   鈹?鈹?
+鈹? 鈹?            鈹?   鈹?(metaclaw_bridge module)      鈹?鈹?
+鈹? 鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?   鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?
+鈹?                               鈹?                    鈹?
+鈹? 鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?   鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈻尖攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?
+鈹? 鈹?Evolution   鈹傗梹鈹€鈹€鈻垛攤 Lesson 鈫?Skill Bridge        鈹?鈹?
+鈹? 鈹?Store       鈹?   鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?
+鈹? 鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?                                    鈹?
+鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
+                           鈹?
+            鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈻尖攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
+            鈹?    MetaClaw Proxy Server    鈹?
+            鈹?    (optional, :30000)       鈹?
+            鈹? 鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹? 鈹?
+            鈹? 鈹?SkillManager (40+ skills)鈹?鈹?
+            鈹? 鈹?+ arc-* learned skills   鈹?鈹?
+            鈹? 鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹? 鈹?
+            鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
 ```
 
 ### How It Works
 
 1. **Lesson Capture**: During each pipeline run, the `EvolutionStore` automatically records failures, warnings, and anomalies as structured lessons in `evolution/lessons.jsonl`.
 
-2. **Lesson → Skill Conversion**: After a run completes, lessons above a configurable severity threshold are converted into `arc-*` skill files stored in `~/.metaclaw/skills/`. Each skill contains: trigger conditions, failure root cause, and actionable guidance.
+2. **Lesson 鈫?Skill Conversion**: After a run completes, lessons above a configurable severity threshold are converted into `arc-*` skill files stored in `~/.metaclaw/skills/`. Each skill contains: trigger conditions, failure root cause, and actionable guidance.
 
 3. **Skill Injection**: On the next run, `build_overlay()` reads all `arc-*` skills and injects them into the LLM prompt for every stage via the `evolution_overlay` parameter. The LLM receives explicit instructions to avoid previously encountered pitfalls.
 
@@ -655,13 +655,13 @@ metaclaw_bridge:
 #### Step 3: Run
 
 ```bash
-# First run — captures lessons, generates initial skills
+# First run 鈥?captures lessons, generates initial skills
 researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
 
 # Check generated skills
 ls ~/.metaclaw/skills/arc-*/SKILL.md
 
-# Second run — skills from Run 1 are automatically injected
+# Second run 鈥?skills from Run 1 are automatically injected
 researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
 ```
 
@@ -675,7 +675,7 @@ metaclaw start --mode skills_only --port 30000
 bash scripts/metaclaw_start.sh
 ```
 
-The proxy is optional — without it, the pipeline still benefits from skill injection via `build_overlay()` and falls back to your configured LLM endpoint.
+The proxy is optional 鈥?without it, the pipeline still benefits from skill injection via `build_overlay()` and falls back to your configured LLM endpoint.
 
 ### Experiment Results
 
@@ -695,7 +695,7 @@ In controlled A/B experiments (same topic, same LLM, same configuration):
 | File | Purpose |
 |------|---------|
 | `researchclaw/metaclaw_bridge/` | Integration module (config, session, lesson_to_skill, prm_gate, skill_feedback) |
-| `researchclaw/evolution.py` | `build_overlay()` — reads intra-run lessons + cross-run arc-* skills |
+| `researchclaw/evolution.py` | `build_overlay()` 鈥?reads intra-run lessons + cross-run arc-* skills |
 | `researchclaw/llm/client.py` | Proxy routing with automatic fallback |
 | `~/.metaclaw/skills/arc-*/SKILL.md` | Learned skill files (auto-generated) |
 | `scripts/metaclaw_start.sh` | Helper script to launch MetaClaw proxy |
@@ -805,7 +805,7 @@ from researchclaw.literature.search import search_papers
 
 papers = search_papers("transformer attention mechanisms", limit=20)
 for p in papers:
-    print(f"{p.title} ({p.year}) — cited {p.citation_count}x")
+    print(f"{p.title} ({p.year}) 鈥?cited {p.citation_count}x")
     print(p.to_bibtex())
 ```
 
@@ -831,7 +831,7 @@ researchclaw doctor --config config.yaml
 | Code validation rejects all attempts | LLM generates unsafe code | Switch to `simulated` mode, or try a more capable model |
 | Gate stage blocks pipeline | Manual approval required | Use `--auto-approve` for autonomous mode |
 | Pipeline fails mid-run | Transient API error | Run with `--resume` to continue from the last checkpoint |
-| Citations marked HALLUCINATED | LLM invented fake references | This is expected — Stage 23 catches these. Use `references_verified.bib` instead |
+| Citations marked HALLUCINATED | LLM invented fake references | This is expected 鈥?Stage 23 catches these. Use `references_verified.bib` instead |
 | LaTeX won't compile | Missing style packages | Install the conference style files, or use `tectonic` which auto-downloads them |
 
 ### Resuming a Failed Run
@@ -860,7 +860,7 @@ This prints a human-readable summary: which stages passed, which failed, key met
 A: Depends on your model and topic complexity. A typical run with GPT-4o makes ~35-60 API calls across all 23 stages (paper drafting now uses 3 sequential calls for section-by-section writing). Expect roughly $3-12 per run. Simulated mode uses slightly fewer tokens since it doesn't generate real experiment code.
 
 **Q: Can I use a local LLM (Ollama, vLLM, etc.)?**
-A: Yes — any OpenAI-compatible endpoint works. Set `llm.base_url` to your local server (e.g., `http://localhost:11434/v1` for Ollama). Quality depends heavily on the model's capabilities.
+A: Yes 鈥?any OpenAI-compatible endpoint works. Set `llm.base_url` to your local server (e.g., `http://localhost:11434/v1` for Ollama). Quality depends heavily on the model's capabilities.
 
 **Q: Can I run only part of the pipeline?**
 A: Yes. Use `--from-stage STAGE_NAME` to start from any stage. The stage reads its inputs from previously generated artifacts, so the earlier stages must have completed at least once.
@@ -875,8 +875,8 @@ A: AutoResearchClaw is a research tool, not a paper mill. The output is a strong
 A: The pipeline checkpoints after every stage. Use `--resume` to pick up where it left off. Failed stages are retried according to the `max_retries` setting in each stage's contract.
 
 **Q: Can I change the research topic mid-run?**
-A: Not recommended — the pipeline builds on prior stages' outputs. Start a new run with the new topic instead.
+A: Not recommended 鈥?the pipeline builds on prior stages' outputs. Start a new run with the new topic instead.
 
 ---
 
-*Last updated: March 2026 · AutoResearchClaw v0.3.1+*
+*Last updated: March 2026 路 AutoResearchClaw v0.3.1+*
