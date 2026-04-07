@@ -169,6 +169,20 @@ Resume the latest run:
 researchclaw run --config config.arc.yaml --resume
 ```
 
+### Launch the visual workspace with one script
+
+Git Bash / WSL / Linux / macOS:
+
+```bash
+./scripts/start_workspace.sh
+```
+
+Custom config or port:
+
+```bash
+./scripts/start_workspace.sh ./config.arc.yaml 127.0.0.1 8090
+```
+
 ### Launch the visual workspace
 
 ```powershell
@@ -180,6 +194,8 @@ Open:
 ```text
 http://127.0.0.1:8080/
 ```
+
+If you are on Windows and prefer Bash, use [scripts/start_workspace.sh](scripts/start_workspace.sh) from Git Bash.
 
 ## Cloud Server Workflow
 
