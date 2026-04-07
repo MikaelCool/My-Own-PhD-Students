@@ -122,9 +122,10 @@ Windows PowerShell:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e .
+.\.venv\Scripts\python.exe -m pip install -e .
 ```
+
+If PowerShell blocks `Activate.ps1`, you do not need activation. Use the venv Python path directly as shown above.
 
 Linux/macOS:
 
