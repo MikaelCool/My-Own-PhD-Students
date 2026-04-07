@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
 from researchclaw.server.app import _app_state
 
@@ -59,6 +61,51 @@ async def update_settings(req: SettingsUpdateRequest) -> dict[str, Any]:
     target.write_text(yaml_text, encoding="utf-8")
     _app_state["config"] = config
     return {"status": "ok", "config": config.to_dict(), "yaml_text": yaml_text}
+
+
+@router.post("/settings/test-notification")
+async def test_notification(req: SettingsUpdateRequest) -> dict[str, Any]:
+    config_path = _app_state.get("config_path")
+    config = _app_state.get("config")
+    if req.config is not None:
+        if not config_path:
+            raise HTTPException(status_code=500, detail="Config path unavailable")
+        try:
+            config = RCConfig.from_dict(
+                req.config,
+                project_root=Path(config_path).parent,
+                check_paths=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not config:
+        raise HTTPException(status_code=500, detail="Config unavailable")
+
+    notifications = getattr(config, "notifications", None)
+    channel = str(getattr(notifications, "channel", "") or "").strip()
+    target = str(getattr(notifications, "target", "") or "").strip()
+    if not channel:
+        raise HTTPException(status_code=400, detail="Notification channel is not configured")
+    if not target:
+        raise HTTPException(status_code=400, detail="Notification target is not configured")
+
+    body = (
+        "My Own PhD Students workspace notification path is active\n\n"
+        f"Time: {datetime.now().isoformat(timespec='seconds')}\n"
+        f"Channel: {channel}\n"
+        "Source: workspace settings"
+    )
+
+    try:
+        AdapterBundle.from_config(config).message.notify(
+            channel=channel,
+            subject="Feishu notification test",
+            body=body,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"status": "ok", "channel": channel}
 
 
 def _yaml_ready(value: Any) -> Any:

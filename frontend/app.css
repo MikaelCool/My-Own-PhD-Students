@@ -876,6 +876,12 @@ h2,
   grid-column: span 2;
 }
 
+.settings-action-row {
+  display: flex;
+  align-items: center;
+  padding-top: 4px;
+}
+
 input,
 textarea,
 select,
