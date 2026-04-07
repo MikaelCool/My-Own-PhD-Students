@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -108,6 +115,84 @@ class MCPMessageAdapter:
 
 
 @dataclass
+class WebhookMessageAdapter:
+    """MessageAdapter that posts to local chat webhooks."""
+
+    channel: str
+    target: str
+    secret: str = ""
+    timeout_sec: int = 10
+
+    def notify(self, channel: str, subject: str, body: str) -> str:
+        normalized = self._normalize_channel(channel or self.channel)
+        content = f"{subject}\n\n{body}".strip()
+        url, payload = self._build_request(normalized, content)
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_sec) as response:
+                status = getattr(response, "status", 200)
+                if status >= 400:
+                    raise RuntimeError(
+                        f"webhook notify failed with status {status} for {normalized}"
+                    )
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"webhook notify failed with status {exc.code} for {normalized}: {detail}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                f"webhook notify failed for {normalized}: {exc.reason}"
+            ) from exc
+        return f"webhook-{normalized}"
+
+    @staticmethod
+    def _normalize_channel(channel: str) -> str:
+        value = (channel or "").strip().lower()
+        aliases = {
+            "feishu": "lark",
+            "wechat": "wecom",
+            "wechat_work": "wecom",
+            "weixin": "wecom",
+            "qywx": "wecom",
+        }
+        return aliases.get(value, value)
+
+    def _build_request(self, channel: str, content: str) -> tuple[str, dict]:
+        if channel == "lark":
+            url = self.target
+            payload: dict[str, object] = {
+                "msg_type": "text",
+                "content": {"text": content},
+            }
+            if self.secret:
+                timestamp = str(int(time.time()))
+                sign_base = f"{timestamp}\n{self.secret}".encode("utf-8")
+                digest = hmac.new(
+                    self.secret.encode("utf-8"),
+                    sign_base,
+                    digestmod=hashlib.sha256,
+                ).digest()
+                payload["timestamp"] = timestamp
+                payload["sign"] = base64.b64encode(digest).decode("utf-8")
+            return url, payload
+        if channel == "wecom":
+            return self.target, {
+                "msgtype": "markdown",
+                "markdown": {"content": content},
+            }
+        raise ValueError(
+            "Unsupported notification channel for local webhook adapter: "
+            f"{channel!r}. Use one of: lark, feishu, wecom, wechat_work."
+        )
+
+
+@dataclass
 class MCPWebFetchAdapter:
     """WebFetchAdapter backed by an MCP tool call."""
 
@@ -130,6 +215,18 @@ class AdapterBundle:
     def from_config(cls, config: object) -> AdapterBundle:
         """Build an AdapterBundle from RCConfig, wiring MCP adapters when enabled."""
         bundle = cls()
+        notifications = getattr(config, "notifications", None)
+        channel = str(getattr(notifications, "channel", "") or "")
+        target = str(getattr(notifications, "target", "") or "").strip()
+        secret = str(getattr(notifications, "secret", "") or "")
+        webhook_channels = {"lark", "feishu", "wecom", "wechat_work", "wechat", "qywx"}
+        if target and channel.strip().lower() in webhook_channels:
+            bundle.message = WebhookMessageAdapter(
+                channel=channel,
+                target=target,
+                secret=secret,
+            )
+            return bundle
         mcp_cfg = getattr(config, "mcp", None)
         if mcp_cfg and getattr(mcp_cfg, "server_enabled", False):
             uri = f"http://localhost:{getattr(mcp_cfg, 'server_port', 3000)}"

@@ -187,7 +187,9 @@ class RuntimeConfig:
 class NotificationsConfig:
     channel: str
     target: str = ""
+    secret: str = ""
     on_stage_start: bool = False
+    on_stage_complete: bool = False
     on_stage_fail: bool = False
     on_gate_required: bool = True
 
@@ -845,7 +847,9 @@ class RCConfig:
             notifications=NotificationsConfig(
                 channel=notifications["channel"],
                 target=notifications.get("target", ""),
+                secret=notifications.get("secret", ""),
                 on_stage_start=bool(notifications.get("on_stage_start", False)),
+                on_stage_complete=bool(notifications.get("on_stage_complete", False)),
                 on_stage_fail=bool(notifications.get("on_stage_fail", False)),
                 on_gate_required=bool(notifications.get("on_gate_required", True)),
             ),

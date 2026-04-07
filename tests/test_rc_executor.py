@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import pytest
 
-from researchclaw.adapters import AdapterBundle
+from researchclaw.adapters import AdapterBundle, WebhookMessageAdapter
 from researchclaw.config import RCConfig
 from researchclaw.pipeline import executor as rc_executor
 from researchclaw.pipeline.stages import Stage, StageStatus
@@ -159,6 +159,40 @@ def test_safe_json_loads_valid_and_invalid(payload: str, default, expected) -> N
     assert rc_executor._safe_json_loads(payload, default) == expected
 
 
+def test_adapter_bundle_uses_webhook_message_adapter_for_lark(tmp_path: Path) -> None:
+    config = RCConfig.from_dict(
+        {
+            "project": {"name": "notify-test", "mode": "docs-first"},
+            "research": {"topic": "test topic"},
+            "runtime": {"timezone": "UTC"},
+            "notifications": {
+                "channel": "lark",
+                "target": "https://example.invalid/hook",
+                "secret": "top-secret",
+            },
+            "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
+            "openclaw_bridge": {"use_message": False},
+            "llm": {
+                "provider": "openai-compatible",
+                "base_url": "http://localhost:1234/v1",
+                "api_key_env": "RC_TEST_KEY",
+                "api_key": "inline-test-key",
+                "primary_model": "fake-model",
+            },
+            "experiment": {"mode": "simulated"},
+        },
+        project_root=tmp_path,
+        check_paths=False,
+    )
+
+    bundle = AdapterBundle.from_config(config)
+
+    assert isinstance(bundle.message, WebhookMessageAdapter)
+    assert bundle.message.channel == "lark"
+    assert bundle.message.target == "https://example.invalid/hook"
+    assert bundle.message.secret == "top-secret"
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
@@ -178,6 +212,76 @@ def test_safe_filename_truncates_to_100_chars() -> None:
     cleaned = rc_executor._safe_filename(raw)
     assert len(cleaned) == 100
     assert cleaned == "x" * 100
+
+
+def test_execute_stage_sends_stage_complete_summary_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = RCConfig.from_dict(
+        {
+            "project": {"name": "notify-test", "mode": "docs-first"},
+            "research": {"topic": "test topic"},
+            "runtime": {"timezone": "UTC"},
+            "notifications": {
+                "channel": "local",
+                "on_stage_start": True,
+                "on_stage_complete": True,
+                "on_stage_fail": True,
+                "on_gate_required": True,
+            },
+            "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
+            "openclaw_bridge": {"use_message": True, "use_memory": False},
+            "llm": {
+                "provider": "openai-compatible",
+                "base_url": "http://localhost:1234/v1",
+                "api_key_env": "RC_TEST_KEY",
+                "api_key": "inline-test-key",
+                "primary_model": "fake-model",
+            },
+            "security": {"hitl_required_stages": [5, 9, 20]},
+            "experiment": {"mode": "simulated"},
+        },
+        project_root=tmp_path,
+        check_paths=False,
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    adapters = AdapterBundle()
+
+    def fake_executor(stage_dir, _run_dir, _config, _adapters, **_kwargs):
+        (stage_dir / "goal.md").write_text(
+            "# Goal\n- Baseline-aware scope locked\n- Novel contribution target defined\n- Quality improves via early scoping\n",
+            encoding="utf-8",
+        )
+        (stage_dir / "hardware_profile.json").write_text(
+            json.dumps({"device": "cpu"}),
+            encoding="utf-8",
+        )
+        return rc_executor.StageResult(
+            stage=Stage.TOPIC_INIT,
+            status=StageStatus.DONE,
+            artifacts=("goal.md", "hardware_profile.json"),
+        )
+
+    monkeypatch.setitem(rc_executor._STAGE_EXECUTORS, Stage.TOPIC_INIT, fake_executor)
+
+    result = rc_executor.execute_stage(
+        Stage.TOPIC_INIT,
+        run_dir=run_dir,
+        run_id="run-notify",
+        config=config,
+        adapters=adapters,
+    )
+
+    assert result.status == StageStatus.DONE
+    assert len(adapters.message.calls) == 2
+    assert adapters.message.calls[0][1] == "stage-01-start"
+    assert adapters.message.calls[1][1] == "stage-01-complete"
+    completion_body = adapters.message.calls[1][2]
+    assert "What was done:" in completion_body
+    assert "Innovation:" in completion_body
+    assert "Advantages:" in completion_body
+    assert "Baseline-aware scope locked" in completion_body
 
 
 def test_build_context_preamble_basic_fields(

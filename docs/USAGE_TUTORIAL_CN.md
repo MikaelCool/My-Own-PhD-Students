@@ -5,31 +5,30 @@
 ## 1. 这套系统会做什么
 
 给它一个研究主题，或者一个 baseline 家族，它会按 23 个阶段完成：
-
 - 文献检索与筛选
-- 问题收敛与创新点生成
+- 问题拆解与创新点生成
 - 实验设计、代码生成、实验执行
 - 结果分析、论文写作、同行评审
 - 质量门控、导出和归档
 
 如果你启用了当前仓库里的增强流程，它还会：
-
 - 优先读取 `Zotero -> Obsidian -> 本地 seed`
 - 使用 `claims_evidence_matrix` 约束创新点
 - 按 `target_venue` 做主编式 review score loop
+- 在每个阶段完成后给飞书或企业微信推送摘要
 
 ## 2. 环境要求
 
 - Python `3.11+`
-- 建议先创建项目虚拟环境 `.venv`
+- 建议先创建虚拟环境 `.venv`
 - 如果要跑 `docker` 模式实验，需要 Docker
-- 如果要启用 OpenCode Beast Mode，需要 `node` 和 `npm`
+- 如果要启用 `OpenCode Beast Mode`，需要 `node` 和 `npm`
 - 如果用 API 模型，需要对应的 API Key
 - 如果用 ACP agent 模式，需要本地可用的 ACP agent
 
 ## 3. 安装
 
-在仓库根目录执行：
+Windows PowerShell：
 
 ```powershell
 python -m venv .venv
@@ -37,7 +36,7 @@ python -m venv .venv
 pip install -e .
 ```
 
-如果你是 Linux / macOS：
+Linux / macOS：
 
 ```bash
 python3 -m venv .venv
@@ -136,8 +135,7 @@ skills:
 
 如果你想让系统围绕已有 baseline 做创新，不要只给 topic，最好准备 [baseline_briefing.md](D:/codex/AutoResearchClaw/baseline_briefing.md)。
 
-建议至少写这几项：
-
+建议至少写这些项：
 - baseline 论文标题
 - baseline 核心创新
 - baseline 实验设置
@@ -149,14 +147,13 @@ skills:
 
 ### 6.2 Zotero
 
-如果你有自己的文献库，推荐直接接入 Zotero。
+如果你有自己的文献库，建议直接接入 Zotero。
 
 支持两种输入：
-
 - Zotero JSON export
 - Zotero sqlite library
 
-配置项：
+配置示例：
 
 ```yaml
 research:
@@ -209,11 +206,41 @@ researchclaw run --config config.arc.yaml --topic "Your research idea" --skip-pr
 ```
 
 说明：
-
 - `--auto-approve`：自动通过 gate stages
-- 不加 `--auto-approve` 时，`docs-first` / `semi-auto` 会在 gate 处停下
+- 不加 `--auto-approve` 时，`docs-first` / `semi-auto` 会在 gate 处停住
 - `--resume`：从最近 checkpoint 恢复
 - `--from-stage`：从指定阶段继续
+
+## 7.1 接入飞书或企业微信通知
+
+如果你希望每完成一个阶段，就在聊天工具里收到“做了什么、创新点、优势”摘要，现在可以直接用本地 webhook。
+
+支持：
+- `lark` / `feishu`
+- `wecom` / `wechat_work`
+
+你需要提供：
+- 飞书机器人 webhook URL
+- 飞书签名 secret，可选
+- 或企业微信群机器人 webhook URL
+
+配置示例：
+
+```yaml
+notifications:
+  channel: "lark"   # 或 "wecom"
+  target: "https://open.feishu.cn/open-apis/bot/v2/hook/..."
+  secret: ""        # 飞书签名机器人时再填
+  on_stage_start: true
+  on_stage_complete: true
+  on_stage_fail: true
+  on_gate_required: true
+```
+
+说明：
+- `target` 留空时，不会真的发消息
+- `on_stage_complete: true` 时，每个阶段完成后都会推送阶段摘要
+- webhook 短暂失败不会打断主流程
 
 ## 8. 推荐的第一次跑法
 
@@ -234,7 +261,6 @@ artifacts/rc-YYYYMMDD-HHMMSS-<hash>/
 ```
 
 重点看这些文件：
-
 - `stage-09/claims_evidence_matrix.md`
 - `stage-15/claims_from_results.md`
 - `stage-18/review_state.json`
@@ -244,7 +270,6 @@ artifacts/rc-YYYYMMDD-HHMMSS-<hash>/
 - `deliverables/`
 
 如果你按当前增强流程来用，建议优先读：
-
 1. `phase1_handoff.md`
 2. `phase2_handoff.md`
 3. `review_state.json`
@@ -254,12 +279,11 @@ artifacts/rc-YYYYMMDD-HHMMSS-<hash>/
 ## 10. 怎么判断这一轮跑得值不值
 
 不要只看是不是生成了论文，要看下面几个判断点：
-
 - `claims_evidence_matrix.md` 里的 claim 是否真的对应到实验
 - `claims_from_results.md` 里是否有大量 `Unsupported or Rejected Claims`
 - `review_state.json` 里的 `editorial_action` 是 `revise_paper` 还是 `supplement_experiments` / `rework_innovation`
 - `paper_score.json` 是否接近或达到目标 venue 的门槛
-- `review_comment_audit.md` 是否只是机械改写，还是确实在判断 reviewer comments 合不合理
+- `review_comment_audit.md` 是否真的在判断 reviewer comments 合不合理，而不是机械改写
 
 ## 11. 常用命令
 
@@ -291,7 +315,6 @@ researchclaw run --config config.arc.yaml --topic "..."
 ### 12.2 ACP agent 跑不起来
 
 检查：
-
 - `llm.provider` 是否是 `acp`
 - `llm.acp.agent` 是否填对
 - `llm.acp.acpx_command` 是否存在
@@ -300,45 +323,14 @@ researchclaw run --config config.arc.yaml --topic "..."
 ### 12.3 sandbox 模式跑实验失败
 
 优先检查：
+- `.venv` 是否装好了依赖
+- `experiment.sandbox.python_path` 是否指向正确 Python
+- 题目是不是太大，超出本地时间或算力预算
+- 先从更小的 baseline 或更短的 budget 开始
 
-- `.venv` 是否存在
-- `experiment.sandbox.python_path` 是否正确
-- 依赖是否真的安装在这个 Python 环境里
-
-Windows 常见值：
-
-```yaml
-experiment:
-  sandbox:
-    python_path: ".venv/Scripts/python.exe"
-```
-
-### 12.4 生成出来的东西很多，不知道先看什么
-
-先看这 5 个：
-
-- `stage-09/claims_evidence_matrix.md`
-- `stage-15/claims_from_results.md`
-- `stage-18/review_state.json`
-- `stage-18/paper_score.json`
-- `deliverables/`
-
-## 13. 进阶用法
-
-如果你需要更深入的流程说明，再看这些文档：
+## 13. 推荐继续读的文档
 
 - [docs/AUTOMATION_PROCESS_CN.md](D:/codex/AutoResearchClaw/docs/AUTOMATION_PROCESS_CN.md)
 - [docs/BASELINE_WORKFLOW_CN.md](D:/codex/AutoResearchClaw/docs/BASELINE_WORKFLOW_CN.md)
 - [docs/integration-guide.md](D:/codex/AutoResearchClaw/docs/integration-guide.md)
 - [docs/TESTER_GUIDE_CN.md](D:/codex/AutoResearchClaw/docs/TESTER_GUIDE_CN.md)
-
-## 14. 一条最实用的建议
-
-不要把它当“自动写论文机器”，要把它当“自动研究流水线”。
-
-真正决定结果质量的，通常不是模型名，而是这四件事：
-
-- 你的 baseline briefing 是否具体
-- 你的 Zotero / Obsidian 输入是否干净
-- 你的 `target_venue` 是否设置正确
-- 你是否认真检查 `claims_evidence_matrix` 和 `review_state`

@@ -207,6 +207,421 @@ _STAGE_EXECUTORS: dict[Stage, Callable[..., StageResult]] = {
     Stage.CITATION_VERIFY: _execute_citation_verify,
 }
 
+_STAGE_NOTIFICATION_GUIDANCE: dict[Stage, dict[str, tuple[str, ...]]] = {
+    Stage.TOPIC_INIT: {
+        "done": (
+            "Locked the research topic, scope, and operating constraints.",
+        ),
+        "innovation": (
+            "Front-loads topic constraints so later novelty claims stay grounded.",
+        ),
+        "advantages": (
+            "Reduces scope drift before literature and experiment work begin.",
+        ),
+    },
+    Stage.PROBLEM_DECOMPOSE: {
+        "done": (
+            "Decomposed the topic into sub-problems, questions, and anchors.",
+        ),
+        "innovation": (
+            "Turns a vague idea into testable problem slices instead of one broad prompt.",
+        ),
+        "advantages": (
+            "Improves downstream search coverage and experiment alignment.",
+        ),
+    },
+    Stage.SEARCH_STRATEGY: {
+        "done": (
+            "Prepared the literature search plan and source priority.",
+        ),
+        "innovation": (
+            "Prioritizes curated knowledge sources before loose seed files.",
+        ),
+        "advantages": (
+            "Raises relevance and lowers noise in the collected evidence base.",
+        ),
+    },
+    Stage.LITERATURE_COLLECT: {
+        "done": (
+            "Collected papers, notes, and seed documents into a unified pool.",
+        ),
+        "innovation": (
+            "Blends Zotero, Obsidian, and local seeds into one intake path.",
+        ),
+        "advantages": (
+            "Produces a stronger evidence base for novelty and baseline analysis.",
+        ),
+    },
+    Stage.LITERATURE_SCREEN: {
+        "done": (
+            "Screened candidate literature for relevance and quality.",
+        ),
+        "innovation": (
+            "Applies stage gates before weak sources contaminate later reasoning.",
+        ),
+        "advantages": (
+            "Improves citation quality and reduces hallucinated framing.",
+        ),
+    },
+    Stage.KNOWLEDGE_EXTRACT: {
+        "done": (
+            "Extracted structured facts, methods, and limitations from the literature.",
+        ),
+        "innovation": (
+            "Converts papers into reusable knowledge blocks instead of raw text.",
+        ),
+        "advantages": (
+            "Makes synthesis, gap finding, and hypothesis generation more reliable.",
+        ),
+    },
+    Stage.SYNTHESIS: {
+        "done": (
+            "Synthesized literature into gaps, tensions, and candidate directions.",
+        ),
+        "innovation": (
+            "Forces explicit gap articulation before claiming contribution.",
+        ),
+        "advantages": (
+            "Improves novelty quality and prevents shallow topic rewording.",
+        ),
+    },
+    Stage.HYPOTHESIS_GEN: {
+        "done": (
+            "Generated hypotheses and candidate contribution directions.",
+        ),
+        "innovation": (
+            "Pushes the pipeline toward testable claims instead of generic ideas.",
+        ),
+        "advantages": (
+            "Gives later experiment design a concrete claim structure to validate.",
+        ),
+    },
+    Stage.EXPERIMENT_DESIGN: {
+        "done": (
+            "Designed the experiment plan, baselines, ablations, and success criteria.",
+        ),
+        "innovation": (
+            "Uses a claims-evidence matrix to bind novelty to measurable support.",
+        ),
+        "advantages": (
+            "Makes unsupported contributions easier to catch before paper writing.",
+        ),
+    },
+    Stage.CODE_GENERATION: {
+        "done": (
+            "Generated executable experiment code and supporting files.",
+        ),
+        "innovation": (
+            "Keeps generated code tied to the validated experiment plan.",
+        ),
+        "advantages": (
+            "Improves implementation consistency and reduces off-topic experiments.",
+        ),
+    },
+    Stage.RESOURCE_PLANNING: {
+        "done": (
+            "Estimated runtime, compute needs, and execution strategy.",
+        ),
+        "innovation": (
+            "Matches experiment ambition to practical compute constraints early.",
+        ),
+        "advantages": (
+            "Reduces failed runs caused by unrealistic resource assumptions.",
+        ),
+    },
+    Stage.EXPERIMENT_RUN: {
+        "done": (
+            "Executed the experiment suite and collected primary metrics.",
+        ),
+        "innovation": (
+            "Uses real execution results instead of paper-only speculation.",
+        ),
+        "advantages": (
+            "Creates the evidence base needed for trustworthy analysis.",
+        ),
+    },
+    Stage.ITERATIVE_REFINE: {
+        "done": (
+            "Refined the implementation and reran experiments based on failures or weak results.",
+        ),
+        "innovation": (
+            "Closes the loop between runtime feedback and code updates.",
+        ),
+        "advantages": (
+            "Improves robustness and gives the method another chance to beat baselines.",
+        ),
+    },
+    Stage.RESULT_ANALYSIS: {
+        "done": (
+            "Analyzed experiment outputs and converted results into claims.",
+        ),
+        "innovation": (
+            "Checks whether results genuinely support the proposed contribution.",
+        ),
+        "advantages": (
+            "Catches weak evidence before it gets baked into the paper draft.",
+        ),
+    },
+    Stage.RESEARCH_DECISION: {
+        "done": (
+            "Decided whether to proceed, refine, or pivot.",
+        ),
+        "innovation": (
+            "Allows the pipeline to downgrade or rework claims when evidence is weak.",
+        ),
+        "advantages": (
+            "Prevents low-quality ideas from cruising into the writing stage unchecked.",
+        ),
+    },
+    Stage.PAPER_OUTLINE: {
+        "done": (
+            "Outlined the manuscript structure and evidence flow.",
+        ),
+        "innovation": (
+            "Aligns paper structure with verified evidence and contribution logic.",
+        ),
+        "advantages": (
+            "Makes the final draft easier to revise under reviewer pressure.",
+        ),
+    },
+    Stage.PAPER_DRAFT: {
+        "done": (
+            "Drafted the paper from the validated experiment and analysis artifacts.",
+        ),
+        "innovation": (
+            "Keeps the manuscript grounded in stage outputs rather than free-form generation.",
+        ),
+        "advantages": (
+            "Reduces fabricated claims and improves traceability to evidence.",
+        ),
+    },
+    Stage.PEER_REVIEW: {
+        "done": (
+            "Ran a reviewer-style audit over the current paper state.",
+        ),
+        "innovation": (
+            "Scores the draft against venue-aware review expectations.",
+        ),
+        "advantages": (
+            "Makes revision needs visible before final export.",
+        ),
+    },
+    Stage.PAPER_REVISION: {
+        "done": (
+            "Revised the manuscript based on review findings.",
+        ),
+        "innovation": (
+            "Treats reviewer comments as structured work items instead of vague feedback.",
+        ),
+        "advantages": (
+            "Improves paper quality in a measurable loop rather than one-shot writing.",
+        ),
+    },
+    Stage.QUALITY_GATE: {
+        "done": (
+            "Checked whether the draft clears the configured quality bar.",
+        ),
+        "innovation": (
+            "Uses score thresholds and venue expectations as explicit gates.",
+        ),
+        "advantages": (
+            "Stops weak drafts from being exported as if they were submission-ready.",
+        ),
+    },
+    Stage.KNOWLEDGE_ARCHIVE: {
+        "done": (
+            "Archived artifacts, lessons, and reusable run knowledge.",
+        ),
+        "innovation": (
+            "Preserves operational learning instead of throwing run history away.",
+        ),
+        "advantages": (
+            "Improves future runs through memory and reusable skills.",
+        ),
+    },
+    Stage.EXPORT_PUBLISH: {
+        "done": (
+            "Packaged deliverables and exported the paper for external use.",
+        ),
+        "innovation": (
+            "Converts the internal markdown-first workflow into final publication assets.",
+        ),
+        "advantages": (
+            "Produces a cleaner handoff for Overleaf, review, and release workflows.",
+        ),
+    },
+    Stage.CITATION_VERIFY: {
+        "done": (
+            "Verified citation integrity and pruned low-confidence references.",
+        ),
+        "innovation": (
+            "Adds a final citation sanity check after writing and export.",
+        ),
+        "advantages": (
+            "Reduces the risk of fabricated or irrelevant references in the final paper.",
+        ),
+    },
+}
+
+
+def _notify_enabled(config: RCConfig) -> bool:
+    channel = str(getattr(config.notifications, "channel", "") or "").strip().lower()
+    target = str(getattr(config.notifications, "target", "") or "").strip()
+    return bool(config.openclaw_bridge.use_message or (target and channel not in {"", "console", "local"}))
+
+
+def _safe_notify(
+    adapters: AdapterBundle,
+    config: RCConfig,
+    *,
+    subject: str,
+    body: str,
+) -> None:
+    if not _notify_enabled(config):
+        return
+    try:
+        adapters.message.notify(config.notifications.channel, subject, body)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Notification failed for %s: %s", subject, exc)
+
+
+def _read_textish_artifact(path: Path) -> str:
+    if path.suffix.lower() in {".md", ".txt", ".yaml", ".yml", ".json"}:
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+    return ""
+
+
+def _extract_markdownish_lines(text: str, *, keywords: tuple[str, ...], limit: int) -> list[str]:
+    seen: set[str] = set()
+    matches: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        normalized = line.lstrip("#*-0123456789. ").strip()
+        if len(normalized) < 12 or len(normalized) > 180:
+            continue
+        lower = normalized.lower()
+        if keywords and not any(keyword in lower for keyword in keywords):
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        matches.append(normalized)
+        if len(matches) >= limit:
+            break
+    return matches
+
+
+def _artifact_snippets(stage_dir: Path, artifacts: tuple[str, ...], *, limit: int = 2) -> list[str]:
+    snippets: list[str] = []
+    for artifact in artifacts:
+        text = _read_textish_artifact(stage_dir / artifact)
+        if not text:
+            continue
+        snippets.extend(
+            _extract_markdownish_lines(
+                text,
+                keywords=(),
+                limit=max(1, limit - len(snippets)),
+            )
+        )
+        if len(snippets) >= limit:
+            break
+    return snippets[:limit]
+
+
+def _signal_lines(
+    stage_dir: Path,
+    artifacts: tuple[str, ...],
+    *,
+    keywords: tuple[str, ...],
+    limit: int = 2,
+) -> list[str]:
+    lines: list[str] = []
+    for artifact in artifacts:
+        text = _read_textish_artifact(stage_dir / artifact)
+        if not text:
+            continue
+        lines.extend(
+            _extract_markdownish_lines(
+                text,
+                keywords=keywords,
+                limit=max(1, limit - len(lines)),
+            )
+        )
+        if len(lines) >= limit:
+            break
+    return lines[:limit]
+
+
+def _build_stage_completion_body(
+    *,
+    stage: Stage,
+    stage_dir: Path,
+    run_id: str,
+    result: StageResult,
+    duration_sec: float,
+) -> str:
+    guidance = _STAGE_NOTIFICATION_GUIDANCE.get(stage, {})
+    artifact_list = ", ".join(result.artifacts[:4]) if result.artifacts else "no explicit artifacts"
+    what_done = list(guidance.get("done", (f"Completed {stage.name.lower()} and wrote stage outputs.",)))
+    what_done.extend(_artifact_snippets(stage_dir, result.artifacts))
+    innovations = list(guidance.get("innovation", ("Strengthened the novelty/evidence loop for this stage.",)))
+    innovations.extend(
+        _signal_lines(
+            stage_dir,
+            result.artifacts,
+            keywords=("novel", "innovation", "contribution", "hypothesis", "claim", "gap", "baseline", "venue"),
+        )
+    )
+    advantages = list(guidance.get("advantages", ("Improved pipeline traceability and execution quality.",)))
+    advantages.extend(
+        _signal_lines(
+            stage_dir,
+            result.artifacts,
+            keywords=("advantage", "benefit", "improv", "outperform", "score", "quality", "evidence", "coverage", "robust"),
+        )
+    )
+    what_done = list(dict.fromkeys(what_done))[:3]
+    innovations = list(dict.fromkeys(innovations))[:3]
+    advantages = list(dict.fromkeys(advantages))[:3]
+    body_lines = [
+        f"Run: {run_id}",
+        f"Stage {int(stage):02d} {stage.name} completed in {duration_sec:.2f}s.",
+        f"Artifacts: {artifact_list}",
+        f"Decision: {result.decision}",
+        "",
+        "What was done:",
+    ]
+    body_lines.extend(f"- {line}" for line in what_done)
+    body_lines.append("")
+    body_lines.append("Innovation:")
+    body_lines.extend(f"- {line}" for line in innovations)
+    body_lines.append("")
+    body_lines.append("Advantages:")
+    body_lines.extend(f"- {line}" for line in advantages)
+    return "\n".join(body_lines)
+
+
+def _build_stage_failure_body(
+    *,
+    stage: Stage,
+    run_id: str,
+    result: StageResult,
+) -> str:
+    return "\n".join(
+        [
+            f"Run: {run_id}",
+            f"Stage {int(stage):02d} {stage.name} failed.",
+            f"Decision: {result.decision}",
+            f"Error: {result.error or 'unknown error'}",
+        ]
+    )
+
 
 def execute_stage(
     stage: Stage,
@@ -239,11 +654,12 @@ def execute_stage(
                 return result
 
     bridge = config.openclaw_bridge
-    if bridge.use_message and config.notifications.on_stage_start:
-        adapters.message.notify(
-            config.notifications.channel,
-            f"stage-{int(stage):02d}-start",
-            f"Starting {stage.name}",
+    if config.notifications.on_stage_start:
+        _safe_notify(
+            adapters,
+            config,
+            subject=f"stage-{int(stage):02d}-start",
+            body=f"Starting {stage.name}",
         )
     if bridge.use_memory:
         adapters.memory.append("stages", f"{run_id}:{int(stage)}:running")
@@ -384,11 +800,12 @@ def execute_stage(
                 decision="block",
                 evidence_refs=result.evidence_refs,
             )
-            if bridge.use_message and config.notifications.on_gate_required:
-                adapters.message.notify(
-                    config.notifications.channel,
-                    f"gate-{int(stage):02d}",
-                    f"Approval required for {stage.name}",
+            if config.notifications.on_gate_required:
+                _safe_notify(
+                    adapters,
+                    config,
+                    subject=f"gate-{int(stage):02d}",
+                    body=f"Approval required for {stage.name}",
                 )
 
     if bridge.use_memory:
@@ -412,5 +829,26 @@ def execute_stage(
         )
     except OSError:
         pass
+
+    if result.status == StageStatus.DONE and config.notifications.on_stage_complete:
+        _safe_notify(
+            adapters,
+            config,
+            subject=f"stage-{int(stage):02d}-complete",
+            body=_build_stage_completion_body(
+                stage=stage,
+                stage_dir=stage_dir,
+                run_id=run_id,
+                result=result,
+                duration_sec=stage_health["duration_sec"],
+            ),
+        )
+    elif result.status == StageStatus.FAILED and config.notifications.on_stage_fail:
+        _safe_notify(
+            adapters,
+            config,
+            subject=f"stage-{int(stage):02d}-fail",
+            body=_build_stage_failure_body(stage=stage, run_id=run_id, result=result),
+        )
 
     return result

@@ -26,6 +26,35 @@ The current version is oriented toward practical research iteration rather than 
 - Markdown-first writing with final export to conference-style `LaTeX`
 - Reusable learned skills and multi-phase handoff artifacts
 
+## Automation Flow
+
+The pipeline is easiest to understand as 3 connected phases:
+
+1. `Read & Frame`
+   - ingest literature from `Zotero -> Obsidian -> local seed`
+   - decompose the problem
+   - synthesize gaps and generate hypotheses
+2. `Build & Test`
+   - design experiments against baselines
+   - generate and run code
+   - refine when evidence is weak or results are unstable
+3. `Write & Defend`
+   - draft the paper
+   - review it under a venue-aware rubric
+   - revise, export, and verify citations
+
+The key point is that the phases are not one-way. Weak novelty can route the run back to hypothesis generation, missing evidence can route it back to experiment design, and low review scores can route it back into revision or more experiments.
+
+## Why It Is Different
+
+This project is built around a stricter research loop than a normal "paper generator":
+
+- novelty must be tied to evidence through `claims_evidence_matrix.md`
+- experiments are compared against baselines instead of judged in isolation
+- review is venue-aware instead of generic
+- writing is constrained by prior artifacts rather than free-form text generation
+- lessons and reusable skills are archived for later runs
+
 ## Why This Repo Exists
 
 Most "AI paper generation" projects stop at drafting text. This repo is trying to close the harder loop:
@@ -94,6 +123,36 @@ Resume the latest run:
 ```powershell
 researchclaw run --config config.arc.yaml --resume
 ```
+
+## Stage Notifications
+
+The repo now supports local stage notifications to `Feishu/Lark` and `WeCom`.
+
+Each completed stage can push a compact report that includes:
+
+- what the stage completed
+- what innovation it introduced or strengthened
+- what practical advantages it created for the next stages
+
+What you need:
+
+- For `Feishu/Lark`: bot webhook URL, and optionally the signing secret if your bot requires it
+- For `WeCom`: group robot webhook URL
+
+Minimal config example:
+
+```yaml
+notifications:
+  channel: "lark"        # or "wecom"
+  target: "https://open.feishu.cn/open-apis/bot/v2/hook/..."
+  secret: ""             # optional for signed Feishu/Lark bots
+  on_stage_start: true
+  on_stage_complete: true
+  on_stage_fail: true
+  on_gate_required: true
+```
+
+If you prefer to keep the current run local until the webhook is ready, leave `target` empty and the pipeline will skip network notifications.
 
 ## Recommended Configuration Focus
 
