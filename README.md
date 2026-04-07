@@ -95,7 +95,6 @@ Open the web workspace locally to inspect the live UI:
 
 - browser workspace with project list and multi-run context
 - structured settings form in Chinese and English
-- one-click Feishu notification test from workspace settings
 - visual canvas with right-side node details
 - tutorial page with synchronized language switching
 
