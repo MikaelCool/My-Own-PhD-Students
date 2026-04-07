@@ -213,6 +213,50 @@ def test_validate_config_rejects_invalid_metric_direction(tmp_path: Path):
     assert "Invalid experiment.metric_direction: upward" in result.errors
 
 
+def test_validate_config_rejects_non_list_seed_paths(tmp_path: Path):
+    data = _valid_config_data()
+    data["research"]["literature_seed_paths"] = "papers"
+
+    result = validate_config(data, project_root=tmp_path, check_paths=False)
+
+    assert result.ok is False
+    assert "research.literature_seed_paths must be a list" in result.errors
+
+
+def test_rcconfig_from_dict_parses_seed_paths(tmp_path: Path):
+    data = _valid_config_data()
+    data["research"]["literature_seed_paths"] = ["papers"]
+    data["research"]["note_seed_paths"] = ["notes"]
+    data["research"]["max_seed_docs"] = 7
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.research.literature_seed_paths == (str(tmp_path / "papers"),)
+    assert config.research.note_seed_paths == (str(tmp_path / "notes"),)
+    assert config.research.max_seed_docs == 7
+
+
+def test_rcconfig_parses_review_score_loop_settings(tmp_path: Path):
+    data = _valid_config_data()
+    data["quality_assessor"] = {
+        "target_venue": "NeurIPS",
+        "review_target_score": 6.8,
+        "max_review_rounds": 5,
+        "min_score_improvement": 0.3,
+    }
+    data["research"]["zotero_library_path"] = "zotero.json"
+    data["knowledge_base"]["obsidian_vault"] = "vault"
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.quality_assessor.target_venue == "NeurIPS"
+    assert config.quality_assessor.review_target_score == 6.8
+    assert config.quality_assessor.max_review_rounds == 5
+    assert config.quality_assessor.min_score_improvement == 0.3
+    assert config.research.zotero_library_path == str(tmp_path / "zotero.json")
+    assert config.knowledge_base.obsidian_vault == str(tmp_path / "vault")
+
+
 def test_rcconfig_from_dict_happy_path(tmp_path: Path):
     config = RCConfig.from_dict(
         _valid_config_data(),

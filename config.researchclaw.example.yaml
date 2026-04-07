@@ -8,6 +8,15 @@ research:
     - "machine-learning"
   daily_paper_count: 10
   quality_threshold: 4.0
+  baseline_brief: "baseline_briefing.md"
+  zotero_library_path: ""
+  zotero_attachment_root: ""
+  zotero_collection_filters: []
+  max_zotero_items: 20
+  literature_seed_paths: []
+  note_seed_paths: []
+  max_seed_docs: 12
+  max_obsidian_notes: 16
 
 runtime:
   timezone: "America/New_York"
@@ -25,6 +34,7 @@ notifications:
 knowledge_base:
   backend: "markdown"
   root: "docs/kb"
+  obsidian_vault: ""
 
 openclaw_bridge:
   use_cron: false
@@ -188,7 +198,21 @@ experiment:
 # Customize LLM prompts by pointing to your own YAML file.
 # Copy prompts.default.yaml, edit the prompts you want, and set the path here.
 prompts:
-  custom_file: ""  # e.g. "my_prompts.yaml" (empty = use built-in defaults)
+  custom_file: "prompts.high_impact_baseline.yaml"  # empty = use built-in defaults
+
+skills:
+  enabled: true
+  custom_dirs:
+    - "researchclaw/skills/custom"
+  max_skills_per_stage: 4
+
+quality_assessor:
+  enabled: true
+  score_history: true
+  target_venue: "CCF-A"
+  review_target_score: 8.0
+  max_review_rounds: 4
+  min_score_improvement: 0.2
 
 
 # === MetaClaw Integration ===

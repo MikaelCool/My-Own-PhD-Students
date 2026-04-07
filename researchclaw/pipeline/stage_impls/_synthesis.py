@@ -14,11 +14,17 @@ from researchclaw.pipeline._helpers import (
     StageResult,
     _default_hypotheses,
     _get_evolution_overlay,
+    _load_baseline_briefing,
     _multi_perspective_generate,
     _parse_jsonl_rows,
     _read_prior_artifact,
     _synthesize_perspectives,
     _utcnow_iso,
+)
+from researchclaw.pipeline.research_governor import (
+    build_phase_charter,
+    build_stage_skill_overlay,
+    write_phase_handoff,
 )
 from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
@@ -44,12 +50,23 @@ def _execute_synthesis(
         cards_context = "\n\n".join(snippets)
     if llm is not None:
         _pm = prompts or PromptManager()
-        _overlay = _get_evolution_overlay(run_dir, "synthesis")
+        _overlay = (
+            _get_evolution_overlay(run_dir, "synthesis")
+            + "\n"
+            + build_phase_charter("synthesis")
+            + "\n"
+            + build_stage_skill_overlay(
+                config,
+                stage_name="synthesis",
+                context=cards_context[:3000],
+            )
+        )
         sp = _pm.for_stage(
             "synthesis",
             evolution_overlay=_overlay,
             topic=config.research.topic,
             cards_context=cards_context,
+            baseline_briefing=_load_baseline_briefing(config),
         )
         resp = llm.chat(
             [{"role": "user", "content": sp.user}],
@@ -148,9 +165,19 @@ def _execute_hypothesis_gen(
     except Exception:  # noqa: BLE001
         logger.warning("Novelty check failed (non-blocking)", exc_info=True)
 
+    write_phase_handoff(
+        stage_dir / "phase1_handoff.md",
+        "Phase 1 Handoff",
+        {
+            "Discovery Council Charter": build_phase_charter("hypothesis_gen"),
+            "Synthesis": synthesis[:2500],
+            "Hypotheses": hypotheses_md[:2500],
+        },
+    )
+
     return StageResult(
         stage=Stage.HYPOTHESIS_GEN,
         status=StageStatus.DONE,
-        artifacts=("hypotheses.md",) + novelty_artifacts,
+        artifacts=("hypotheses.md", "phase1_handoff.md") + novelty_artifacts,
         evidence_refs=("stage-08/hypotheses.md",),
     )

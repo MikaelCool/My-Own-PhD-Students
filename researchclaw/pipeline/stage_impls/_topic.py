@@ -15,6 +15,7 @@ from researchclaw.pipeline._domain import _detect_domain
 from researchclaw.pipeline._helpers import (
     StageResult,
     _get_evolution_overlay,
+    _load_baseline_briefing,
     _read_prior_artifact,
     _safe_json_loads,
     _utcnow_iso,
@@ -23,6 +24,50 @@ from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
 
 logger = logging.getLogger(__name__)
+
+
+def _fallback_problem_anchor(
+    topic: str,
+    goal_text: str,
+    problem_tree: str,
+    baseline_briefing: str,
+) -> str:
+    baseline_present = "Yes" if baseline_briefing.strip() else "No"
+    return f"""# Problem Anchor
+
+## Core Question
+Which algorithmic weakness in the current baseline family is most worth attacking for `{topic}`?
+
+## Dominant Contribution
+Deliver one main method contribution and at most two supporting innovations; avoid workflow or engineering polish as claimed novelty.
+
+## Baseline Gap
+- Baseline briefing provided: {baseline_present}
+- The proposed work must identify a concrete failure mode, limiting assumption, or missing theoretical mechanism in the baseline.
+
+## Proof Obligations
+- State what must be shown theoretically or mechanistically.
+- State what evidence would falsify the main claim.
+
+## Experimental Obligations
+- Reproduce baseline settings fairly before claiming gains.
+- Compare against strong baselines on the same metrics and regimes.
+- Include at least one failure-case or boundary-condition check.
+
+## Non-Goals
+- No pure system optimization, prompt tinkering, or infrastructure contributions.
+- No broad superiority claims without direct evidence.
+
+## Source Context
+### Goal
+{goal_text[:1400]}
+
+### Problem Tree
+{problem_tree[:1400]}
+
+## Generated
+{_utcnow_iso()}
+"""
 
 
 def _execute_topic_init(
@@ -46,6 +91,7 @@ def _execute_topic_init(
             evolution_overlay=_overlay,
             topic=topic,
             domains=domains,
+            baseline_briefing=_load_baseline_briefing(config),
             project_name=config.project.name,
             quality_threshold=config.research.quality_threshold,
         )
@@ -122,14 +168,16 @@ def _execute_problem_decompose(
     prompts: PromptManager | None = None,
 ) -> StageResult:
     goal_text = _read_prior_artifact(run_dir, "goal.md") or ""
+    baseline_briefing = _load_baseline_briefing(config)
+    _pm = prompts or PromptManager()
     if llm is not None:
-        _pm = prompts or PromptManager()
         _overlay = _get_evolution_overlay(run_dir, "problem_decompose")
         sp = _pm.for_stage(
             "problem_decompose",
             evolution_overlay=_overlay,
             topic=config.research.topic,
             goal_text=goal_text,
+            baseline_briefing=baseline_briefing,
         )
         resp = llm.chat(
             [{"role": "user", "content": sp.user}],
@@ -163,6 +211,30 @@ Derived from `goal.md` for topic: {config.research.topic}
 {_utcnow_iso()}
 """
     (stage_dir / "problem_tree.md").write_text(body, encoding="utf-8")
+
+    if llm is not None:
+        _anchor_overlay = _get_evolution_overlay(run_dir, "problem_decompose")
+        _anchor_prompt = _pm.for_stage(
+            "problem_anchor",
+            evolution_overlay=_anchor_overlay,
+            topic=config.research.topic,
+            goal_text=goal_text,
+            problem_tree=body,
+            baseline_briefing=baseline_briefing,
+        )
+        _anchor_resp = llm.chat(
+            [{"role": "user", "content": _anchor_prompt.user}],
+            system=_anchor_prompt.system,
+        )
+        problem_anchor = _anchor_resp.content
+    else:
+        problem_anchor = _fallback_problem_anchor(
+            config.research.topic,
+            goal_text,
+            body,
+            baseline_briefing,
+        )
+    (stage_dir / "problem_anchor.md").write_text(problem_anchor, encoding="utf-8")
 
     # IMP-35: Topic/title quality pre-evaluation
     # Quick LLM check: is the topic well-scoped for a conference paper?
@@ -207,6 +279,6 @@ Derived from `goal.md` for topic: {config.research.topic}
     return StageResult(
         stage=Stage.PROBLEM_DECOMPOSE,
         status=StageStatus.DONE,
-        artifacts=("problem_tree.md",),
-        evidence_refs=("stage-02/problem_tree.md",),
+        artifacts=("problem_tree.md", "problem_anchor.md"),
+        evidence_refs=("stage-02/problem_tree.md", "stage-02/problem_anchor.md"),
     )

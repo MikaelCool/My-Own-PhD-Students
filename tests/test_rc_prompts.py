@@ -72,6 +72,7 @@ class TestPromptManagerDefaults:
         for required in [
             "topic_init",
             "problem_decompose",
+            "problem_anchor",
             "search_strategy",
             "literature_collect",
             "literature_screen",
@@ -83,6 +84,7 @@ class TestPromptManagerDefaults:
             "resource_planning",
             "result_analysis",
             "research_decision",
+            "result_to_claim",
             "paper_outline",
             "paper_draft",
             "peer_review",
@@ -135,6 +137,7 @@ class TestPromptManagerDefaults:
         assert pm.max_tokens("code_generation") == 8192
         assert pm.max_tokens("paper_draft") == 16384
         assert pm.max_tokens("topic_init") is None
+        assert pm.max_tokens("result_to_claim") == 6144
 
     def test_block_topic_constraint(self) -> None:
         pm = PromptManager()
@@ -178,6 +181,33 @@ class TestPromptManagerDefaults:
             "iterative_repair", issue_text="import error", all_files_ctx="..."
         )
         assert "import error" in irp.user
+
+    def test_peer_review_prompt_mentions_scorecard(self) -> None:
+        pm = PromptManager()
+        sp = pm.for_stage(
+            "peer_review",
+            topic="RL",
+            draft="draft",
+            experiment_evidence="evidence",
+            claims_from_results="claims",
+        )
+        assert "Scorecard" in sp.user
+        assert "claim_calibration" in sp.user
+
+    def test_paper_revision_prompt_accepts_review_loop_context(self) -> None:
+        pm = PromptManager()
+        sp = pm.for_stage(
+            "paper_revision",
+            academic_style_guide="style",
+            narrative_writing_rules="narrative",
+            anti_hedging_rules="hedging",
+            anti_repetition_rules="repeat",
+            review_loop_context="loopctx",
+            topic_constraint="constraint",
+            draft="draft",
+            reviews="reviews",
+        )
+        assert "loopctx" in sp.user
 
 
 # ---------------------------------------------------------------------------

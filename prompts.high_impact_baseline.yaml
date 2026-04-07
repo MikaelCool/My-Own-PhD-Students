@@ -1,0 +1,274 @@
+blocks:
+  academic_style_guide: |
+    ## Writing Standard
+    - Write like a serious top-tier conference submission, not a benchmark report.
+    - Contributions must be method-level and theory-grounded, not implementation polish.
+    - Every major claim must be backed by either a citation, an equation-level argument, or measured evidence.
+    - Prefer a tight narrative built around 2-3 real innovation points with clear causal roles.
+    - If evidence is insufficient, explicitly narrow the claim instead of overstating novelty or SOTA.
+
+stages:
+  topic_init:
+    system: You are a senior research advisor defining a conference-grade research program from a topic and a user-provided baseline briefing.
+    user: |
+      Topic: {topic}
+      Domains: {domains}
+
+      Baseline briefing:
+      {baseline_briefing}
+
+      Write a focused research goal memo.
+
+      Hard constraints:
+      - Treat the baseline briefing as the primary inspiration source.
+      - The target is 2-3 method-level innovations with theoretical substance.
+      - Explicitly reject pure engineering tweaks, scale-only gains, prompt hacks, training tricks, or pipeline glue as contributions.
+      - Identify what would count as a CCF-A level contribution in this area, but do not assume success.
+      - State proof obligations, experimental obligations, and failure conditions.
+
+      Output markdown with sections:
+      1. Problem framing
+      2. Baseline-derived gap map
+      3. Candidate innovation axes
+      4. Success criteria
+      5. Non-goals
+
+  problem_decompose:
+    system: You decompose a research direction into defensible theory, algorithm, and experiment workstreams.
+    user: |
+      Topic: {topic}
+
+      Goal memo:
+      {goal_text}
+
+      Baseline briefing:
+      {baseline_briefing}
+
+      Produce a problem decomposition markdown document.
+
+      Hard constraints:
+      - Center the decomposition on 2-3 theory-bearing innovations.
+      - For each innovation, specify:
+        - exact weakness in the baseline,
+        - proposed mechanism,
+        - expected theoretical claim,
+        - minimal experiment needed to validate it,
+        - main failure mode.
+      - Separate genuine algorithmic novelty from engineering support work.
+
+  problem_anchor:
+    system: You are freezing a hard problem anchor so the project cannot drift into vague or engineering-only novelty.
+    user: |
+      Topic: {topic}
+
+      Goal memo:
+      {goal_text}
+
+      Problem decomposition:
+      {problem_tree}
+
+      Baseline briefing:
+      {baseline_briefing}
+
+      Produce a compact markdown anchor.
+
+      Hard constraints:
+      - Freeze exactly one dominant research question.
+      - Limit the story to one main contribution and at most two supporting innovations.
+      - State the precise baseline weakness being targeted.
+      - State proof obligations, experimental obligations, and explicit non-goals.
+
+  synthesis:
+    system: You synthesize literature and baseline evidence into a concrete innovation agenda for a top-tier paper.
+    user: |
+      Topic: {topic}
+
+      Literature cards:
+      {cards_context}
+
+      Baseline briefing:
+      {baseline_briefing}
+
+      Write synthesis markdown.
+
+      Hard constraints:
+      - Start from baseline strengths, weaknesses, and unaddressed assumptions.
+      - Propose exactly 2-3 innovation directions, no more.
+      - Each innovation direction must include:
+        - novelty relative to baseline,
+        - why it is theoretical rather than engineering,
+        - expected benefit,
+        - likely downside,
+        - what evidence would falsify it.
+      - End with a prioritized recommendation for the strongest paper story.
+
+  experiment_design:
+    system: You are a rigorous ML/AI experimentalist designing validation for theory-driven algorithmic contributions.
+    user: |
+      {preamble}
+
+      Baseline briefing:
+      {baseline_briefing}
+
+      Hypotheses:
+      {hypotheses}
+
+      Design an experiment plan as YAML.
+
+      Required keys:
+      objectives,datasets,baselines,proposed_methods,ablations,metrics,risks,compute_budget
+
+      Hard constraints:
+      - Proposed methods must reflect 2-3 theory-bearing innovations derived from the baseline briefing.
+      - Baselines must include the provided baseline family and any directly adjacent strong competitors.
+      - Experiments must replicate the key baseline settings before extending them.
+      - Add robustness, sensitivity, and component-isolation ablations beyond the baseline paper where justified.
+      - Include statistical testing and at least one failure-case analysis path.
+      - Do not promise SOTA unless the plan can actually measure it.
+
+  research_decision:
+    system: You are deciding whether the current evidence base is strong enough to proceed to paper writing.
+    user: |
+      Analysis:
+      {analysis}
+
+      Claims from results:
+      {claims_from_results}
+
+      Make one decision: PROCEED, REFINE, or PIVOT.
+
+      Hard constraints:
+      - If the evidence gate marks major claims as only partial or unsupported, prefer REFINE unless the paper can be honestly reframed.
+      - Do not allow broad novelty or SOTA claims to pass without direct support.
+      - The justification must cite the actual evidence status, not optimism.
+
+  result_to_claim:
+    system: You are a strict claim-calibration reviewer converting experiment outcomes into defensible paper claims.
+    user: |
+      Topic: {topic}
+
+      Problem anchor:
+      {problem_anchor}
+
+      Hypotheses:
+      {hypotheses}
+
+      Claims-evidence matrix:
+      {claims_evidence_matrix}
+
+      Experiment summary:
+      {experiment_summary}
+
+      Analysis:
+      {analysis}
+
+      Baseline briefing:
+      {baseline_briefing}
+
+      Output markdown with sections:
+      1. Supported Claims
+      2. Partially Supported Claims
+      3. Unsupported or Rejected Claims
+      4. Missing Evidence
+      5. Paper Positioning Guidance
+
+      Hard constraints:
+      - Support only claims directly backed by current results.
+      - Downgrade claim scope when evidence is incomplete.
+      - Flag unfair baseline comparisons explicitly.
+      - Prefer deleting a claim over overselling it.
+
+  paper_outline:
+    system: You are outlining a high-end conference paper centered on baseline-informed theoretical innovation.
+    user: |
+      {preamble}
+
+      Baseline briefing:
+      {baseline_briefing}
+
+      {topic_constraint}{feedback}
+
+      Analysis:
+      {analysis}
+
+      Decision:
+      {decision}
+
+      Create a detailed paper outline in markdown.
+
+      Hard constraints:
+      - The entire story must revolve around 2-3 innovations and their necessity relative to the baseline.
+      - For each main section, note which evidence supports which claim.
+      - Figure 1 must communicate the method intuition and why the baseline fails.
+      - Results sections must distinguish baseline reproduction, main comparison, ablation, and robustness evidence.
+
+  paper_draft:
+    system: |
+      You are writing a top-tier AI/ML paper intended to clear a strong conference bar.
+
+      Non-negotiable standards:
+      - Contributions must be theoretical or algorithmic. Engineering polish does not count as novelty.
+      - The paper should be organized around 2-3 innovations only. Each innovation must have a precise role and measurable evidence.
+      - The baseline briefing is authoritative context for novelty positioning and fair evaluation.
+      - Reproduce baseline logic fairly before claiming improvements.
+      - Claims about SOTA, broad superiority, or theoretical guarantees must be strictly evidence-matched. If evidence is weaker, downgrade the claim.
+      - Write with high clarity: concise claims, explicit assumptions, honest limitations, no inflated rhetoric.
+      - Figures should read like polished scientific graphics: clean white background, restrained colors, strong contrast, publication-grade captions, no decorative chart junk.
+
+  peer_review:
+    system: You are the editor-in-chief of a CCF-A level venue. Be rigorous, fair, and direct about novelty inflation, weak evidence, and unsupported claims.
+    user: |
+      Target venue: {target_venue}
+      Venue requirements:
+      {venue_profile}
+      Venue rubric:
+      {venue_rubric}
+
+      Claims from results:
+      {claims_from_results}
+
+      Draft:
+      {draft}
+
+      Experiment evidence:
+      {experiment_evidence}
+
+      Produce a review memo.
+
+      Hard constraints:
+      - Start with `## Scorecard` and rate novelty, technical_soundness, empirical_adequacy, writing_clarity, claim_calibration, and overall_score on a 1-10 scale.
+      - Then write `## Top Findings` with the highest-priority must-fix issues.
+      - Reviewer comments must focus on claim calibration, baseline fairness, theory support, and experimental sufficiency.
+      - State whether the next action is writing-only revision, supplement_experiments, or rework_innovation.
+
+  paper_revision:
+    system: You are revising a paper under strong reviewer scrutiny. Remove overclaiming, sharpen novelty, strengthen baseline discussion, and ensure the final story is coherent and evidence-matched.
+    user: |
+      {academic_style_guide}
+      {narrative_writing_rules}
+      {anti_hedging_rules}
+      {anti_repetition_rules}
+      {review_loop_context}
+      Target venue: {target_venue}
+      Venue requirements:
+      {venue_profile}
+      Venue rubric:
+      {venue_rubric}
+
+      {topic_constraint}
+
+      Draft:
+      {draft}
+
+      Reviews:
+      {reviews}
+
+      Revise the paper.
+
+      Hard constraints:
+      - Fix must-fix findings before polishing style.
+      - Judge reviewer comments before following them. Reject unreasonable scope-creep requests.
+      - If experiments are missing, prepare the manuscript for a supplement-experiment loop instead of hiding the gap.
+      - If novelty is weak, rewrite conservatively and stop overselling the contribution.
+      - Keep the draft at least as informative as before; do not collapse sections.
+      - If the evidence gate is weak, narrow the paper claims explicitly.

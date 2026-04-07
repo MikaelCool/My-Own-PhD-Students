@@ -35,6 +35,7 @@ from researchclaw.pipeline._helpers import (
     _utcnow_iso,
     _write_stage_meta,
 )
+from researchclaw.pipeline.research_governor import build_phase_charter, build_stage_skill_overlay
 from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
 
@@ -782,9 +783,18 @@ def _execute_iterative_refine(
             topic=config.research.topic,
             exp_plan_anchor=_exp_plan_anchor,
         )
+        governance_overlay = (
+            build_phase_charter("iterative_refine")
+            + "\n"
+            + build_stage_skill_overlay(
+                config,
+                stage_name="iterative_refine",
+                context="\n\n".join(run_summaries[-4:])[:3000],
+            )
+        )
 
         # --- Timeout-aware prompt injection ---
-        user_prompt = ip.user + _saturation_hint
+        user_prompt = governance_overlay + "\n" + ip.user + _saturation_hint
         if prior_timed_out and baseline_metric is None:
             timeout_refine_attempts += 1
             timeout_hint = (

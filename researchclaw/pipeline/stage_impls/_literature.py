@@ -12,6 +12,7 @@ import yaml
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
+from researchclaw.knowledge.source_ingest import load_obsidian_notes, load_zotero_items
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._helpers import (
     StageResult,
@@ -20,6 +21,7 @@ from researchclaw.pipeline._helpers import (
     _extract_topic_keywords,
     _extract_yaml_block,
     _get_evolution_overlay,
+    _load_baseline_briefing,
     _parse_jsonl_rows,
     _read_prior_artifact,
     _safe_filename,
@@ -78,6 +80,241 @@ def _expand_search_queries(queries: list[str], topic: str) -> list[str]:
     return expanded
 
 
+def _resolve_seed_files(
+    entries: tuple[str, ...],
+    *,
+    exts: tuple[str, ...],
+    max_files: int,
+) -> list[Path]:
+    resolved: list[Path] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not entry:
+            continue
+        path = Path(entry).expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        candidates: list[Path] = []
+        if path.is_file() and path.suffix.lower() in exts:
+            candidates = [path]
+        elif path.is_dir():
+            for ext in exts:
+                candidates.extend(sorted(path.rglob(f"*{ext}")))
+        for candidate in candidates:
+            key = str(candidate.resolve()) if candidate.exists() else str(candidate)
+            if key not in seen:
+                seen.add(key)
+                resolved.append(candidate)
+            if len(resolved) >= max_files:
+                return resolved
+    return resolved
+
+
+def _extract_note_title(text: str, fallback: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            return stripped.lstrip("#").strip() or fallback
+        if stripped:
+            return stripped[:120]
+    return fallback
+
+
+def _read_seed_notes(paths: list[Path], *, max_chars: int = 6000) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        text = text.strip()
+        # Short structured notes are still valuable seeds for retrieval/screening.
+        if len(text) < 20:
+            continue
+        rows.append(
+            {
+                "id": f"note-{_safe_filename(path.stem)}",
+                "title": _extract_note_title(text, path.stem),
+                "source": "local_note",
+                "url": str(path),
+                "year": 0,
+                "abstract": re.sub(r"\s+", " ", text[:900]),
+                "full_text_excerpt": re.sub(r"\s+", " ", text[:max_chars]),
+                "collected_at": _utcnow_iso(),
+                "source_path": str(path),
+            }
+        )
+    return rows
+
+
+def _read_seed_pdfs(paths: list[Path], *, max_docs: int = 8) -> list[dict[str, Any]]:
+    if not paths:
+        return []
+    try:
+        from researchclaw.web.pdf_extractor import PDFExtractor
+    except Exception:  # noqa: BLE001
+        return []
+
+    extractor = PDFExtractor(max_pages=4, extract_sections=False)
+    rows: list[dict[str, Any]] = []
+    for path in paths[:max_docs]:
+        pdf = extractor.extract(path)
+        if not pdf.success or not pdf.has_content:
+            continue
+        title = pdf.title.strip() or path.stem
+        authors = [{"name": name} for name in pdf.authors[:6] if name]
+        rows.append(
+            {
+                "id": f"pdf-{_safe_filename(path.stem)}",
+                "title": title,
+                "source": "local_pdf",
+                "url": str(path),
+                "year": 0,
+                "abstract": re.sub(r"\s+", " ", (pdf.abstract or pdf.text[:900]).strip()),
+                "authors": authors,
+                "collected_at": _utcnow_iso(),
+                "source_path": str(path),
+            }
+        )
+    return rows
+
+
+def _dedupe_seed_candidates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        title = str(row.get("title", "")).strip().lower()
+        source_path = str(row.get("source_path", "")).strip().lower()
+        url = str(row.get("url", "")).strip().lower()
+        source = str(row.get("source", "")).strip().lower()
+        key = "||".join((source, title, source_path or url))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped
+
+
+def _collect_seed_inputs(
+    config: RCConfig,
+    *,
+    max_seed_docs: int,
+) -> tuple[list[Path], list[Path], list[dict[str, Any]], dict[str, int]]:
+    pdf_seed_files = _resolve_seed_files(
+        getattr(config.research, "literature_seed_paths", ()),
+        exts=(".pdf",),
+        max_files=max_seed_docs,
+    )
+    note_seed_files = _resolve_seed_files(
+        getattr(config.research, "note_seed_paths", ()),
+        exts=(".md", ".txt"),
+        max_files=max_seed_docs,
+    )
+    zotero_items = load_zotero_items(
+        getattr(config.research, "zotero_library_path", ""),
+        attachment_root=getattr(config.research, "zotero_attachment_root", ""),
+        collection_filters=getattr(config.research, "zotero_collection_filters", ()),
+        max_items=max(1, int(getattr(config.research, "max_zotero_items", max_seed_docs))),
+    )
+    obsidian_notes = load_obsidian_notes(
+        getattr(config.knowledge_base, "obsidian_vault", ""),
+        max_notes=max(1, int(getattr(config.research, "max_obsidian_notes", max_seed_docs))),
+    )
+    local_note_candidates = _read_seed_notes(note_seed_files, max_chars=5000)
+    local_pdf_candidates = _read_seed_pdfs(pdf_seed_files, max_docs=max_seed_docs)
+    seed_candidates = _dedupe_seed_candidates(
+        zotero_items + obsidian_notes + local_note_candidates + local_pdf_candidates
+    )
+    source_mix: dict[str, int] = {}
+    for row in seed_candidates:
+        source = str(row.get("source", "seed"))
+        source_mix[source] = source_mix.get(source, 0) + 1
+    return pdf_seed_files, note_seed_files, seed_candidates, source_mix
+
+
+def _build_seed_digest(
+    *,
+    topic: str,
+    baseline_briefing: str,
+    seed_candidates: list[dict[str, Any]],
+) -> str:
+    lines = [
+        "# Baseline Digest",
+        "",
+        f"- Topic: {topic}",
+        f"- Seed documents loaded: {len(seed_candidates)}",
+        "",
+    ]
+    source_counter: dict[str, int] = {}
+    for row in seed_candidates:
+        source = str(row.get("source", "seed"))
+        source_counter[source] = source_counter.get(source, 0) + 1
+    if source_counter:
+        lines.append(
+            "- Seed source mix: "
+            + ", ".join(f"{name}={count}" for name, count in sorted(source_counter.items()))
+        )
+        lines.append("")
+    if baseline_briefing.strip():
+        lines.extend(
+            [
+                "## Baseline Briefing Excerpt",
+                baseline_briefing[:2200],
+                "",
+            ]
+        )
+    if seed_candidates:
+        lines.append("## Seed Literature / Notes")
+        for row in seed_candidates[:8]:
+            title = str(row.get("title", "Untitled"))
+            source = str(row.get("source", "seed"))
+            excerpt = str(row.get("abstract", "") or row.get("full_text_excerpt", "")).strip()
+            lines.append(f"- **{title}** [{source}]")
+            if excerpt:
+                lines.append(f"  - {excerpt[:280]}")
+        lines.append("")
+    lines.extend(
+        [
+            "## Usage",
+            "- Prioritize these seed sources before broad web expansion.",
+            "- Reuse their terminology for shortlist screening and novelty positioning.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _build_literature_shortlist_md(shortlist: list[dict[str, Any]]) -> str:
+    lines = [
+        "# Literature Shortlist",
+        "",
+        f"- Papers retained: {len(shortlist)}",
+        "",
+    ]
+    for idx, row in enumerate(shortlist[:20], start=1):
+        title = str(row.get("title", f"Paper {idx}"))
+        year = row.get("year", "")
+        source = row.get("source", "")
+        reason = str(row.get("keep_reason", "")).strip()
+        relevance = row.get("relevance_score", "")
+        quality = row.get("quality_score", "")
+        lines.append(f"## {idx}. {title}")
+        lines.append(f"- Year: {year}")
+        lines.append(f"- Source: {source}")
+        if relevance != "":
+            lines.append(f"- Relevance: {relevance}")
+        if quality != "":
+            lines.append(f"- Quality: {quality}")
+        if reason:
+            lines.append(f"- Keep reason: {reason}")
+        abstract = str(row.get("abstract", "")).strip()
+        if abstract:
+            abstract_snippet = re.sub(r"\s+", " ", abstract)[:320]
+            lines.append(f"- Abstract snippet: {abstract_snippet}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Stage executors
 # ---------------------------------------------------------------------------
@@ -94,6 +331,61 @@ def _execute_search_strategy(
 ) -> StageResult:
     problem_tree = _read_prior_artifact(run_dir, "problem_tree.md") or ""
     topic = config.research.topic
+    max_seed_docs = max(1, int(getattr(config.research, "max_seed_docs", 12)))
+    pdf_seed_files, note_seed_files, seed_candidates, _source_mix = _collect_seed_inputs(
+        config,
+        max_seed_docs=max_seed_docs,
+    )
+    baseline_briefing = _load_baseline_briefing(config)
+    local_seed_sources: list[dict[str, Any]] = []
+    if getattr(config.research, "zotero_library_path", "").strip():
+        local_seed_sources.append(
+            {
+                "id": "zotero-library",
+                "name": "Zotero Library",
+                "type": "zotero_library",
+                "url": config.research.zotero_library_path,
+                "status": "configured",
+                "query": "zotero_library",
+                "verified_at": _utcnow_iso(),
+            }
+        )
+    if getattr(config.knowledge_base, "obsidian_vault", "").strip():
+        local_seed_sources.append(
+            {
+                "id": "obsidian-vault",
+                "name": "Obsidian Vault",
+                "type": "obsidian_vault",
+                "url": config.knowledge_base.obsidian_vault,
+                "status": "configured",
+                "query": "obsidian_vault",
+                "verified_at": _utcnow_iso(),
+            }
+        )
+    for entry in config.research.literature_seed_paths:
+        local_seed_sources.append(
+            {
+                "id": f"local-literature-{_safe_filename(Path(entry).name or 'seed')}",
+                "name": f"Local Literature Seed: {entry}",
+                "type": "local_seed",
+                "url": entry,
+                "status": "configured",
+                "query": "local_pdf_seed",
+                "verified_at": _utcnow_iso(),
+            }
+        )
+    for entry in config.research.note_seed_paths:
+        local_seed_sources.append(
+            {
+                "id": f"local-note-{_safe_filename(Path(entry).name or 'note')}",
+                "name": f"Local Note Seed: {entry}",
+                "type": "local_note",
+                "url": entry,
+                "status": "configured",
+                "query": "local_note_seed",
+                "verified_at": _utcnow_iso(),
+            }
+        )
     plan: dict[str, Any] | None = None
     sources: list[dict[str, Any]] | None = None
     if llm is not None:
@@ -149,7 +441,7 @@ def _execute_search_strategy(
             "deduplication": {"method": "title_doi_hash", "fuzzy_threshold": 0.9},
         }
     if not sources:
-        sources = [
+        sources = local_seed_sources + [
             {
                 "id": "arxiv",
                 "name": "arXiv",
@@ -169,6 +461,8 @@ def _execute_search_strategy(
                 "verified_at": _utcnow_iso(),
             },
         ]
+    elif local_seed_sources:
+        sources = local_seed_sources + sources
     if config.openclaw_bridge.use_web_fetch:
         for src in sources:
             try:
@@ -326,6 +620,12 @@ def _execute_literature_collect(
 ) -> StageResult:
     """Stage 4: Collect literature — prefer real APIs, fallback to LLM."""
     topic = config.research.topic
+    max_seed_docs = max(1, int(getattr(config.research, "max_seed_docs", 12)))
+    pdf_seed_files, note_seed_files, seed_candidates, source_mix = _collect_seed_inputs(
+        config,
+        max_seed_docs=max_seed_docs,
+    )
+    baseline_briefing = _load_baseline_briefing(config)
 
     # Read queries.json from Stage 3 (F1.5 output)
     queries_text = _read_prior_artifact(run_dir, "queries.json")
@@ -334,7 +634,7 @@ def _execute_literature_collect(
     year_min: int = queries_data.get("year_min", 2020)
 
     # --- Try real API search first ---
-    candidates: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = list(seed_candidates)
     bibtex_entries: list[str] = []
     real_search_succeeded = False
 
@@ -553,6 +853,33 @@ def _execute_literature_collect(
 
     # Write references.bib (F2.4)
     artifacts = ["candidates.jsonl"]
+    if seed_candidates or baseline_briefing.strip():
+        baseline_digest = _build_seed_digest(
+            topic=topic,
+            baseline_briefing=baseline_briefing,
+            seed_candidates=seed_candidates,
+        )
+        (stage_dir / "baseline_digest.md").write_text(
+            baseline_digest,
+            encoding="utf-8",
+        )
+        (stage_dir / "local_seed_manifest.json").write_text(
+            json.dumps(
+                {
+                    "pdf_seed_files": [str(p) for p in pdf_seed_files],
+                    "note_seed_files": [str(p) for p in note_seed_files],
+                    "zotero_library_path": getattr(config.research, "zotero_library_path", ""),
+                    "obsidian_vault": getattr(config.knowledge_base, "obsidian_vault", ""),
+                    "priority_order": ["zotero", "obsidian", "local_seed"],
+                    "source_mix": source_mix,
+                    "seed_candidates": len(seed_candidates),
+                    "generated": _utcnow_iso(),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        artifacts.extend(["baseline_digest.md", "local_seed_manifest.json"])
     if web_context_parts:
         artifacts.append("web_context.md")
     if (stage_dir / "web_search_result.json").exists():
@@ -572,6 +899,7 @@ def _execute_literature_collect(
                 "real_search": real_search_succeeded,
                 "queries_used": queries,
                 "year_min": year_min,
+                "seed_candidates": len(seed_candidates),
                 "total_candidates": len(candidates),
                 "bibtex_entries": len(bibtex_entries),
                 "ts": _utcnow_iso(),
@@ -697,11 +1025,15 @@ def _execute_literature_screen(
         )
     out = stage_dir / "shortlist.jsonl"
     _write_jsonl(out, shortlist)
+    (stage_dir / "literature_shortlist.md").write_text(
+        _build_literature_shortlist_md(shortlist),
+        encoding="utf-8",
+    )
     return StageResult(
         stage=Stage.LITERATURE_SCREEN,
         status=StageStatus.DONE,
-        artifacts=("shortlist.jsonl",),
-        evidence_refs=("stage-05/shortlist.jsonl",),
+        artifacts=("shortlist.jsonl", "literature_shortlist.md"),
+        evidence_refs=("stage-05/shortlist.jsonl", "stage-05/literature_shortlist.md"),
     )
 
 
@@ -715,9 +1047,12 @@ def _execute_knowledge_extract(
     prompts: PromptManager | None = None,
 ) -> StageResult:
     shortlist = _read_prior_artifact(run_dir, "shortlist.jsonl") or ""
+    shortlist_digest = _read_prior_artifact(run_dir, "literature_shortlist.md") or ""
 
     # Inject web context from Stage 4 if available
     web_context = _read_prior_artifact(run_dir, "web_context.md") or ""
+    if shortlist_digest:
+        shortlist = shortlist_digest + "\n\n--- Shortlist JSONL ---\n" + shortlist[:12_000]
     if web_context:
         shortlist = shortlist + "\n\n--- Web Search Context ---\n" + web_context[:10_000]
 

@@ -25,6 +25,7 @@ from researchclaw.pipeline._helpers import (
     _generate_framework_diagram_prompt,
     _generate_neurips_checklist,
     _get_evolution_overlay,
+    _load_baseline_briefing,
     _read_best_analysis,
     _read_prior_artifact,
     _safe_json_loads,
@@ -51,8 +52,11 @@ def _execute_paper_outline(
     preamble = _build_context_preamble(
         config,
         run_dir,
+        include_problem_anchor=True,
+        include_claim_matrix=True,
         include_analysis=True,
         include_decision=True,
+        include_claims=True,
         include_experiment_data=True,
     )
 
@@ -87,6 +91,7 @@ def _execute_paper_outline(
             "paper_outline",
             evolution_overlay=_overlay,
             preamble=preamble,
+            baseline_briefing=_load_baseline_briefing(config),
             topic_constraint=_pm.block("topic_constraint", topic=config.research.topic),
             feedback=feedback,
             analysis=analysis,
@@ -1218,8 +1223,11 @@ def _execute_paper_draft(
         config,
         run_dir,
         include_goal=True,
+        include_problem_anchor=True,
         include_hypotheses=True,
+        include_claim_matrix=True,
         include_analysis=True,
+        include_claims=True,
         include_experiment_data=True,  # WS-5.1: inject real experiment data
     )
 

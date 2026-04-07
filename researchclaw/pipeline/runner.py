@@ -599,6 +599,53 @@ def execute_pipeline(
                 # experiment summary across all REFINE iterations.
                 _promote_best_stage14(run_dir, config)
 
+        if (
+            stage == Stage.QUALITY_GATE
+            and result.status == StageStatus.DONE
+            and result.decision in {"review_revise", "editorial_experiment_refine", "editorial_pivot"}
+        ):
+            review_attempt = 1
+            review_state_path = run_dir / "REVIEW_STATE.json"
+            if review_state_path.exists():
+                try:
+                    review_state = json.loads(review_state_path.read_text(encoding="utf-8"))
+                    review_attempt = max(1, int(review_state.get("iteration", 1) or 1))
+                except (json.JSONDecodeError, OSError, TypeError, ValueError):
+                    review_attempt = 1
+            if result.decision == "review_revise":
+                rerun_from = Stage.PEER_REVIEW
+                rerun_to = Stage.QUALITY_GATE
+                loop_label = "Review score loop"
+            elif result.decision == "editorial_experiment_refine":
+                rerun_from = Stage.EXPERIMENT_DESIGN
+                rerun_to = Stage.CITATION_VERIFY
+                loop_label = "Editorial loop -> supplement experiments"
+            else:
+                rerun_from = Stage.HYPOTHESIS_GEN
+                rerun_to = Stage.CITATION_VERIFY
+                loop_label = "Editorial loop -> rework innovation"
+            logger.info(
+                "Quality gate requested %s - rerunning from %s (round %d)",
+                result.decision,
+                rerun_from.name,
+                review_attempt,
+            )
+            print(f"[{run_id}] {loop_label} -> rerun from {rerun_from.name} (round {review_attempt})")
+            _version_stage_range(run_dir, rerun_from, rerun_to, review_attempt)
+            review_results = execute_pipeline(
+                run_dir=run_dir,
+                run_id=run_id,
+                config=config,
+                adapters=adapters,
+                from_stage=rerun_from,
+                auto_approve_gates=auto_approve_gates,
+                stop_on_gate=stop_on_gate,
+                skip_noncritical=skip_noncritical,
+                kb_root=kb_root,
+            )
+            results.extend(review_results)
+            break
+
         if result.status == StageStatus.FAILED:
             if skip_noncritical and stage in NONCRITICAL_STAGES:
                 logger.warning("Noncritical stage %s failed - skipping", stage.name)
@@ -961,6 +1008,27 @@ def _version_rollback_stages(
             stage_dir.rename(version_dir)
             logger.debug(
                 "Versioned %s → %s", stage_dir.name, version_dir.name
+            )
+
+
+def _version_stage_range(
+    run_dir: Path,
+    start_stage: Stage,
+    end_stage: Stage,
+    attempt: int,
+) -> None:
+    """Rename a contiguous stage range before a local rerun."""
+    import shutil
+
+    for stage_num in range(int(start_stage), int(end_stage) + 1):
+        stage_dir = run_dir / f"stage-{stage_num:02d}"
+        if stage_dir.exists():
+            version_dir = run_dir / f"stage-{stage_num:02d}_v{attempt}"
+            if version_dir.exists():
+                shutil.rmtree(version_dir)
+            stage_dir.rename(version_dir)
+            logger.debug(
+                "Versioned %s 鈫?%s", stage_dir.name, version_dir.name
             )
 
 

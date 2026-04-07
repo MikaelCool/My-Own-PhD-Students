@@ -812,6 +812,88 @@ def test_degraded_quality_gate_continues_pipeline(
     assert "DEGRADED" in captured.out
 
 
+def test_review_revise_quality_gate_reruns_review_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+    gate_calls = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        nonlocal gate_calls
+        seen.append(stage)
+        if stage == Stage.QUALITY_GATE:
+            gate_calls += 1
+            if gate_calls == 1:
+                (run_dir / "REVIEW_STATE.json").write_text(
+                    json.dumps({"iteration": 1}),
+                    encoding="utf-8",
+                )
+                return StageResult(
+                    stage=stage,
+                    status=StageStatus.DONE,
+                    artifacts=("quality_report.json", "review_loop_gate.json"),
+                    decision="review_revise",
+                )
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    results = rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-review-loop",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert gate_calls == 2
+    assert seen.count(Stage.PEER_REVIEW) == 2
+    assert seen.count(Stage.QUALITY_GATE) == 2
+    assert results[-1].stage == Stage.CITATION_VERIFY
+
+
+def test_editorial_experiment_refine_quality_gate_reruns_from_experiment_design(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+    gate_calls = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        nonlocal gate_calls
+        seen.append(stage)
+        if stage == Stage.QUALITY_GATE:
+            gate_calls += 1
+            if gate_calls == 1:
+                (run_dir / "REVIEW_STATE.json").write_text(
+                    json.dumps({"iteration": 1}),
+                    encoding="utf-8",
+                )
+                return StageResult(
+                    stage=stage,
+                    status=StageStatus.DONE,
+                    artifacts=("quality_report.json", "review_loop_gate.json"),
+                    decision="editorial_experiment_refine",
+                )
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    results = rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-editorial-exp",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert gate_calls == 2
+    assert seen.count(Stage.EXPERIMENT_DESIGN) == 2
+    assert seen.count(Stage.PEER_REVIEW) == 2
+    assert results[-1].stage == Stage.CITATION_VERIFY
+
+
 def test_package_deliverables_called_after_pipeline(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,

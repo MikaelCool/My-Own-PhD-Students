@@ -915,16 +915,114 @@ def _collect_experiment_results(
     return collected
 
 
+def _load_baseline_briefing(config: RCConfig, *, max_chars: int = 8000) -> str:
+    """Load optional user-authored baseline briefing markdown."""
+    baseline_brief = getattr(config.research, "baseline_brief", "").strip()
+    if not baseline_brief:
+        return ""
+    brief_path = Path(baseline_brief).expanduser()
+    if not brief_path.is_absolute():
+        brief_path = Path.cwd() / brief_path
+    try:
+        text = brief_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return text[:max_chars]
+
+
+def _normalize_named_list(value: Any, *, max_items: int = 8) -> list[str]:
+    """Normalize YAML-ish values into a short list of human-readable names."""
+    names: list[str] = []
+    if isinstance(value, dict):
+        for key, raw in value.items():
+            if isinstance(raw, dict):
+                candidate = raw.get("name") or raw.get("id") or key
+            else:
+                candidate = raw or key
+            text = str(candidate).strip()
+            if text:
+                names.append(text)
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                candidate = item.get("name") or item.get("id") or item.get("title")
+                if candidate is None:
+                    candidate = ", ".join(
+                        f"{k}={v}" for k, v in item.items() if isinstance(v, (str, int, float))
+                    )
+            else:
+                candidate = item
+            text = str(candidate).strip()
+            if text:
+                names.append(text)
+    elif isinstance(value, str):
+        text = value.strip()
+        if text:
+            names.append(text)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(name)
+    return deduped[:max_items]
+
+
+def _extract_hypothesis_claims(text: str, *, max_items: int = 3) -> list[str]:
+    """Extract compact claim statements from hypothesis markdown."""
+    claims: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^#{1,6}\s*", "", line)
+        line = re.sub(r"^[-*+]\s+", "", line)
+        line = re.sub(r"^\d+[.)]\s+", "", line)
+        if ":" in line and len(line.split(":", 1)[0]) <= 24:
+            label, remainder = line.split(":", 1)
+            if any(
+                token in label.lower()
+                for token in ("hypothesis", "claim", "h1", "h2", "h3", "innovation")
+            ):
+                line = remainder.strip()
+        if not line or len(line) < 24:
+            continue
+        lowered = line.lower()
+        if any(
+            token in lowered
+            for token in ("hypothesis", "claim", "predict", "expect", "outperform", "improve")
+        ):
+            claims.append(line.rstrip("."))
+
+    if not claims:
+        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+        claims = [re.sub(r"\s+", " ", p).rstrip(".") for p in paragraphs if len(p) >= 24]
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for claim in claims:
+        key = claim.lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(claim)
+    return deduped[:max_items]
+
+
 def _build_context_preamble(
     config: RCConfig,
     run_dir: Path,
     *,
     include_goal: bool = False,
+    include_problem_anchor: bool = False,
     include_hypotheses: bool = False,
     include_synthesis: bool = False,
     include_exp_plan: bool = False,
+    include_claim_matrix: bool = False,
     include_analysis: bool = False,
     include_decision: bool = False,
+    include_claims: bool = False,
     include_experiment_data: bool = False,
 ) -> str:
     parts = [
@@ -936,6 +1034,10 @@ def _build_context_preamble(
         goal = _read_prior_artifact(run_dir, "goal.md")
         if goal:
             parts.append(f"\n### Goal\n{goal[:2200]}")
+    if include_problem_anchor:
+        anchor = _read_prior_artifact(run_dir, "problem_anchor.md")
+        if anchor:
+            parts.append(f"\n### Problem Anchor\n{anchor[:2200]}")
     if include_hypotheses:
         hyp = _read_prior_artifact(run_dir, "hypotheses.md")
         if hyp:
@@ -948,6 +1050,10 @@ def _build_context_preamble(
         plan = _read_prior_artifact(run_dir, "exp_plan.yaml")
         if plan:
             parts.append(f"\n### Experiment Plan\n{plan[:2000]}")
+    if include_claim_matrix:
+        claim_matrix = _read_prior_artifact(run_dir, "claims_evidence_matrix.md")
+        if claim_matrix:
+            parts.append(f"\n### Claims-Evidence Matrix\n{claim_matrix[:2400]}")
     if include_analysis:
         analysis = _read_best_analysis(run_dir)
         if analysis:
@@ -956,7 +1062,20 @@ def _build_context_preamble(
         decision = _read_prior_artifact(run_dir, "decision.md")
         if decision:
             parts.append(f"\n### Research Decision\n{decision[:1500]}")
+    if include_claims:
+        claims = _read_prior_artifact(run_dir, "claims_from_results.md")
+        if claims:
+            parts.append(f"\n### Claims From Results\n{claims[:2200]}")
+    phase1_handoff = _read_prior_artifact(run_dir, "phase1_handoff.md")
+    if phase1_handoff:
+        parts.append(f"\n### Phase 1 Handoff\n{phase1_handoff[:1800]}")
+    phase2_handoff = _read_prior_artifact(run_dir, "phase2_handoff.md")
+    if phase2_handoff:
+        parts.append(f"\n### Phase 2 Handoff\n{phase2_handoff[:1800]}")
     if include_experiment_data:
+        experiment_log = _read_prior_artifact(run_dir, "experiment_log.md")
+        if experiment_log:
+            parts.append(f"\n### Experiment Log\n{experiment_log[:2200]}")
         hw_profile = _load_hardware_profile(run_dir)
         if hw_profile:
             hw_lines = ["### Hardware Environment"]
@@ -979,6 +1098,12 @@ def _build_context_preamble(
                     parts.append(
                         f"\n### LaTeX Table\n```latex\n{summary['latex_table']}\n```"
                     )
+    brief_text = _load_baseline_briefing(config)
+    baseline_digest = _read_prior_artifact(run_dir, "baseline_digest.md")
+    if baseline_digest:
+        parts.append(f"\n### Baseline Digest\n{baseline_digest[:2200]}")
+    if brief_text:
+        parts.append(f"\n### Baseline Briefing\n{brief_text}")
     return "\n".join(parts)
 
 

@@ -18,17 +18,115 @@ from researchclaw.pipeline._helpers import (
     StageResult,
     _build_context_preamble,
     _chat_with_prompt,
+    _extract_hypothesis_claims,
     _extract_yaml_block,
     _get_evolution_overlay,
+    _load_baseline_briefing,
     _load_hardware_profile,
+    _normalize_named_list,
     _read_prior_artifact,
     _safe_json_loads,
     _utcnow_iso,
 )
+from researchclaw.pipeline.research_governor import build_phase_charter, build_stage_skill_overlay
 from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
 
 logger = logging.getLogger(__name__)
+
+
+def _build_claims_evidence_matrix(
+    topic: str,
+    hypotheses: str,
+    plan: dict[str, Any],
+    metric_key: str,
+) -> tuple[str, dict[str, Any]]:
+    claims = _extract_hypothesis_claims(hypotheses, max_items=3)
+    baselines = _normalize_named_list(plan.get("baselines"))
+    proposed = _normalize_named_list(plan.get("proposed_methods"))
+    ablations = _normalize_named_list(plan.get("ablations"))
+    datasets = _normalize_named_list(plan.get("datasets"))
+    metrics = _normalize_named_list(plan.get("metrics")) or [metric_key]
+    objectives = _normalize_named_list(plan.get("objectives"))
+
+    if not claims:
+        claims = [
+            f"The proposed method for {topic} addresses the central baseline weakness more effectively than strong references."
+        ]
+
+    rows: list[dict[str, Any]] = []
+    md_lines = [
+        "# Claims-Evidence Matrix",
+        "",
+        "This matrix binds each research claim to the minimum evidence required before it can appear as a strong paper claim.",
+        "",
+    ]
+
+    for idx, claim in enumerate(claims, start=1):
+        targeted_methods = proposed[idx - 1 : idx] or proposed[:1]
+        supporting_ablations = ablations[idx - 1 : idx] or ablations[:1]
+        required_evidence = [
+            "baseline reproduction on the original setting",
+            "main comparison on the primary metric",
+            "statistical significance or uncertainty estimate",
+            "at least one failure-case or robustness check",
+        ]
+        if supporting_ablations:
+            required_evidence.append("component isolation through ablation")
+
+        row = {
+            "claim_id": f"C{idx}",
+            "claim": claim,
+            "proposed_methods": targeted_methods,
+            "baselines": baselines[: min(3, len(baselines))],
+            "ablations": supporting_ablations,
+            "datasets": datasets[: min(4, len(datasets))],
+            "metrics": metrics[: min(3, len(metrics))],
+            "required_evidence": required_evidence,
+            "failure_signal": (
+                "Claim must be downgraded or removed if the proposed method fails "
+                "to beat or match strong baselines under the planned metrics/regimes."
+            ),
+        }
+        rows.append(row)
+
+        md_lines.extend(
+            [
+                f"## {row['claim_id']}",
+                f"- Claim: {claim}",
+                f"- Proposed condition(s): {', '.join(targeted_methods) if targeted_methods else 'TBD'}",
+                f"- Baselines / controls: {', '.join(row['baselines']) if row['baselines'] else 'TBD'}",
+                f"- Ablations: {', '.join(supporting_ablations) if supporting_ablations else 'At least one component-isolation ablation required'}",
+                f"- Datasets / regimes: {', '.join(row['datasets']) if row['datasets'] else 'Use the reproduced baseline setting first, then extended regimes'}",
+                f"- Metrics: {', '.join(row['metrics'])}",
+                "- Required evidence:",
+            ]
+        )
+        for evidence in required_evidence:
+            md_lines.append(f"  - {evidence}")
+        md_lines.extend(
+            [
+                f"- Failure signal: {row['failure_signal']}",
+                "",
+            ]
+        )
+
+    if objectives:
+        md_lines.extend(
+            [
+                "## Must-Run Order",
+                *(f"- {objective}" for objective in objectives),
+                "",
+            ]
+        )
+
+    payload = {
+        "topic": topic,
+        "generated": _utcnow_iso(),
+        "claims": rows,
+        "must_run_order": objectives,
+    }
+    return "\n".join(md_lines).rstrip() + "\n", payload
 
 
 def _execute_experiment_design(
@@ -41,8 +139,14 @@ def _execute_experiment_design(
     prompts: PromptManager | None = None,
 ) -> StageResult:
     hypotheses = _read_prior_artifact(run_dir, "hypotheses.md") or ""
+    problem_anchor = _read_prior_artifact(run_dir, "problem_anchor.md") or ""
+    synthesis = _read_prior_artifact(run_dir, "synthesis.md") or ""
     preamble = _build_context_preamble(
-        config, run_dir, include_goal=True, include_hypotheses=True
+        config,
+        run_dir,
+        include_goal=True,
+        include_problem_anchor=True,
+        include_hypotheses=True,
     )
     plan: dict[str, Any] | None = None
 
@@ -126,12 +230,23 @@ def _execute_experiment_design(
         _per_condition_sec = int(config.experiment.time_budget_sec * 0.7 / 6)
         _tier1 = "CIFAR-10, CIFAR-100, MNIST, FashionMNIST, STL-10, SVHN"
 
-        _overlay = _get_evolution_overlay(run_dir, "experiment_design")
+        _overlay = (
+            _get_evolution_overlay(run_dir, "experiment_design")
+            + "\n"
+            + build_phase_charter("experiment_design")
+            + "\n"
+            + build_stage_skill_overlay(
+                config,
+                stage_name="experiment_design",
+                context="\n\n".join((hypotheses[:1800], synthesis[:1800], problem_anchor[:1200])),
+            )
+        )
         sp = _pm.for_stage(
             "experiment_design",
             evolution_overlay=_overlay,
             preamble=preamble,
             hypotheses=hypotheses,
+            baseline_briefing=_load_baseline_briefing(config),
             dataset_guidance=_dg_block,
             time_budget_sec=config.experiment.time_budget_sec,
             metric_key=config.experiment.metric_key,
@@ -436,9 +551,31 @@ def _execute_experiment_design(
         yaml.dump(plan, default_flow_style=False, allow_unicode=True),
         encoding="utf-8",
     )
+    claims_matrix_md, claims_matrix_payload = _build_claims_evidence_matrix(
+        config.research.topic,
+        hypotheses,
+        plan,
+        config.experiment.metric_key,
+    )
+    (stage_dir / "claims_evidence_matrix.md").write_text(
+        claims_matrix_md,
+        encoding="utf-8",
+    )
+    (stage_dir / "claims_evidence_matrix.json").write_text(
+        json.dumps(claims_matrix_payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     return StageResult(
         stage=Stage.EXPERIMENT_DESIGN,
         status=StageStatus.DONE,
-        artifacts=("exp_plan.yaml",),
-        evidence_refs=("stage-09/exp_plan.yaml",),
+        artifacts=(
+            "exp_plan.yaml",
+            "claims_evidence_matrix.md",
+            "claims_evidence_matrix.json",
+        ),
+        evidence_refs=(
+            "stage-09/exp_plan.yaml",
+            "stage-09/claims_evidence_matrix.md",
+            "stage-09/claims_evidence_matrix.json",
+        ),
     )

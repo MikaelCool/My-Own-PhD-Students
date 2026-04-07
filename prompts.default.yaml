@@ -262,13 +262,23 @@ stages:
   paper_revision:
     max_tokens: 32768
     system: You are a paper revision expert for NeurIPS/ICML/ICLR submissions. When revising, NEVER shorten existing sections — only expand, improve, and add content. The final paper must be at least as long as the draft.
-    user: 'Revise the paper draft to address all review comments.
+    user: 'Target venue: {target_venue}
+
+      Venue requirements:
+      {venue_profile}
+
+      Venue rubric:
+      {venue_rubric}
+
+      {review_loop_context}Revise the paper draft to address all review comments.
 
       CRITICAL: Maintain or INCREASE the paper length. Each section must meet its minimum word count:
       Abstract (150-250), Introduction (800-1000), Related Work (600-800), Method (1000-1500),
       Experiments (800-1200), Results (600-800), Discussion (400-600), Limitations (200-300), Conclusion (200-300).
 
       Return revised markdown only.
+
+      Judge reviewer comments before obeying them. Reject unreasonable scope-creep requests and keep claims aligned with evidence.
 
       {topic_constraint}Draft:
 
@@ -280,9 +290,22 @@ stages:
       {reviews}'
   peer_review:
     max_tokens: 8192
-    system: You are a balanced conference reviewer who is rigorous about
+    system: You are the editor-in-chief of a top venue and review with strict
       methodology-evidence consistency.
-    user: 'Simulate peer review from at least 2 reviewer perspectives.
+    user: 'Target venue: {target_venue}
+
+      Venue requirements:
+      {venue_profile}
+
+      Venue rubric:
+      {venue_rubric}
+
+      Simulate peer review from at least 2 reviewer perspectives.
+
+      Start with a `## Scorecard` section using 1-10 scores for novelty, technical_soundness,
+      empirical_adequacy, writing_clarity, claim_calibration, and overall_score.
+
+      Then provide a `## Top Findings` section listing the most important must-fix issues.
 
       Output markdown with Reviewer A and Reviewer B, each including strengths,
       weaknesses, and actionable revisions.
@@ -314,6 +337,11 @@ stages:
       - Does the paper acknowledge its limitations honestly?
       - Would you recommend this paper be presented at NeurIPS/ICML? Why or why not?
       - Score the paper 1-10 following this rubric: 1-3 Reject (fundamental flaws), 4-5 Borderline (significant weaknesses), 6-7 Weak Accept (solid but not exciting), 8-9 Accept (strong contribution), 10 Strong Accept (exceptional).
+      - State whether the next action is writing-only revision, supplement_experiments, or rework_innovation.
+
+      Claims from results:
+
+      {claims_from_results}
 
       Paper draft:
 
@@ -331,27 +359,95 @@ stages:
       Goal context:
 
       {goal_text}'
+  problem_anchor:
+    system: You are a research lead freezing a precise problem anchor before the
+      project expands into literature, experimentation, and writing.
+    user: 'Write a compact markdown problem anchor.
+
+      Topic: {topic}
+
+      Goal context:
+
+      {goal_text}
+
+      Problem decomposition:
+
+      {problem_tree}
+
+      Baseline briefing:
+
+      {baseline_briefing}
+
+      Required sections: Core Question, Dominant Contribution, Baseline Gap, Proof
+      Obligations, Experimental Obligations, Non-Goals.'
   quality_gate:
     json_mode: true
-    system: You are a final quality gate evaluator.
+    system: You are a final quality gate evaluator acting at editor level.
     user: 'Evaluate revised paper quality and return JSON.
 
       Schema: {score_1_to_10:number, verdict:string, strengths:[...], weaknesses:[...], required_actions:[...]}.
 
       Threshold: {quality_threshold}
 
+      Target venue: {target_venue}
+
+      Venue requirements:
+      {venue_profile}
+
+      Venue rubric:
+      {venue_rubric}
+
       Paper:
 
       {revised}'
   research_decision:
     system: You are a research program lead making go/no-go decisions.
-    user: 'Make a PROCEED or PIVOT decision from analysis.
+    user: 'Make a PROCEED, REFINE, or PIVOT decision from analysis.
 
       Output markdown with: Decision, Justification, Evidence, Next Actions.
 
       Analysis:
 
-      {analysis}'
+      {analysis}
+
+      Claims from results:
+
+      {claims_from_results}'
+  result_to_claim:
+    max_tokens: 6144
+    system: You are a strict evidence gatekeeper deciding what the experiment
+      results actually justify claiming in the paper.
+    user: 'Convert results into calibrated claims.
+
+      Topic: {topic}
+
+      Problem anchor:
+
+      {problem_anchor}
+
+      Hypotheses:
+
+      {hypotheses}
+
+      Claims-evidence matrix:
+
+      {claims_evidence_matrix}
+
+      Experiment summary:
+
+      {experiment_summary}
+
+      Analysis:
+
+      {analysis}
+
+      Baseline briefing:
+
+      {baseline_briefing}
+
+      Output markdown with exactly these sections: Supported Claims, Partially Supported
+      Claims, Unsupported or Rejected Claims, Missing Evidence, Paper Positioning
+      Guidance.'
   resource_planning:
     json_mode: true
     system: You are an experiment scheduler.

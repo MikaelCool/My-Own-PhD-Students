@@ -16,6 +16,31 @@ DEFAULT_PYTHON_PATH = (
 CONFIG_SEARCH_ORDER: tuple[str, ...] = ("config.arc.yaml", "config.yaml")
 
 
+def _normalize_optional_path_entries(
+    entries: Any, project_root: Path | None
+) -> tuple[str, ...]:
+    if not isinstance(entries, list):
+        return tuple()
+    normalized: list[str] = []
+    for item in entries:
+        path = Path(str(item)).expanduser()
+        if not path.is_absolute() and project_root is not None:
+            path = project_root / path
+        normalized.append(str(path.resolve() if path.exists() else path))
+    return tuple(normalized)
+
+
+def _normalize_optional_path_entry(
+    entry: Any, project_root: Path | None
+) -> str:
+    if entry in (None, ""):
+        return ""
+    path = Path(str(entry)).expanduser()
+    if not path.is_absolute() and project_root is not None:
+        path = project_root / path
+    return str(path.resolve() if path.exists() else path)
+
+
 def _safe_int(val: Any, default: int) -> int:
     """Convert value to int, handling None/null YAML values."""
     if val is None:
@@ -138,6 +163,15 @@ class ResearchConfig:
     domains: tuple[str, ...] = ()
     daily_paper_count: int = 0
     quality_threshold: float = 0.0
+    baseline_brief: str = ""
+    zotero_library_path: str = ""
+    zotero_attachment_root: str = ""
+    zotero_collection_filters: tuple[str, ...] = ()
+    max_zotero_items: int = 20
+    literature_seed_paths: tuple[str, ...] = ()
+    note_seed_paths: tuple[str, ...] = ()
+    max_seed_docs: int = 12
+    max_obsidian_notes: int = 16
     graceful_degradation: bool = True
 
 
@@ -677,6 +711,10 @@ class QualityAssessorConfig:
     )
     venue_recommendation: bool = True
     score_history: bool = True
+    target_venue: str = "CCF-A"
+    review_target_score: float = 6.0
+    max_review_rounds: int = 4
+    min_score_improvement: float = 0.2
 
 
 @dataclass(frozen=True)
@@ -777,6 +815,25 @@ class RCConfig:
                 domains=tuple(research.get("domains") or ()),
                 daily_paper_count=int(research.get("daily_paper_count", 0)),
                 quality_threshold=float(research.get("quality_threshold", 0.0)),
+                baseline_brief=str(research.get("baseline_brief", "")),
+                zotero_library_path=_normalize_optional_path_entry(
+                    research.get("zotero_library_path", ""), project_root
+                ),
+                zotero_attachment_root=_normalize_optional_path_entry(
+                    research.get("zotero_attachment_root", ""), project_root
+                ),
+                zotero_collection_filters=tuple(
+                    str(item) for item in (research.get("zotero_collection_filters") or ())
+                ),
+                max_zotero_items=int(research.get("max_zotero_items", 20)),
+                literature_seed_paths=_normalize_optional_path_entries(
+                    research.get("literature_seed_paths"), project_root
+                ),
+                note_seed_paths=_normalize_optional_path_entries(
+                    research.get("note_seed_paths"), project_root
+                ),
+                max_seed_docs=int(research.get("max_seed_docs", 12)),
+                max_obsidian_notes=int(research.get("max_obsidian_notes", 16)),
                 graceful_degradation=bool(research.get("graceful_degradation", True)),
             ),
             runtime=RuntimeConfig(
@@ -795,7 +852,9 @@ class RCConfig:
             knowledge_base=KnowledgeBaseConfig(
                 backend=knowledge_base.get("backend", "markdown"),
                 root=knowledge_base["root"],
-                obsidian_vault=knowledge_base.get("obsidian_vault", ""),
+                obsidian_vault=_normalize_optional_path_entry(
+                    knowledge_base.get("obsidian_vault", ""), project_root
+                ),
             ),
             openclaw_bridge=OpenClawBridgeConfig(
                 use_cron=bool(bridge.get("use_cron", False)),
@@ -948,6 +1007,40 @@ def validate_config(
                 candidate = kb_root / subdir
                 if not candidate.exists():
                     warnings.append(f"Missing recommended kb subdir: {candidate}")
+
+    baseline_brief_raw = _get_by_path(data, "research.baseline_brief")
+    if check_paths and not _is_blank(baseline_brief_raw) and project_root is not None:
+        baseline_brief = project_root / str(baseline_brief_raw)
+        if not baseline_brief.exists():
+            errors.append(f"Missing path: {baseline_brief}")
+
+    for field_name in (
+        "research.zotero_library_path",
+        "research.zotero_attachment_root",
+        "knowledge_base.obsidian_vault",
+    ):
+        raw_value = _get_by_path(data, field_name)
+        if check_paths and not _is_blank(raw_value) and project_root is not None:
+            candidate = Path(str(raw_value)).expanduser()
+            if not candidate.is_absolute():
+                candidate = project_root / candidate
+            if not candidate.exists():
+                errors.append(f"Missing path: {candidate}")
+
+    for field_name in ("research.literature_seed_paths", "research.note_seed_paths"):
+        raw_value = _get_by_path(data, field_name)
+        if raw_value is None:
+            continue
+        if not isinstance(raw_value, list):
+            errors.append(f"{field_name} must be a list")
+            continue
+        if check_paths and project_root is not None:
+            for item in raw_value:
+                if _is_blank(item):
+                    continue
+                candidate = project_root / str(item)
+                if not candidate.exists():
+                    errors.append(f"Missing path: {candidate}")
 
     return ValidationResult(
         ok=not errors, errors=tuple(errors), warnings=tuple(warnings)
@@ -1384,6 +1477,10 @@ def _parse_quality_assessor_config(data: dict[str, Any]) -> QualityAssessorConfi
         dimensions=dimensions,
         venue_recommendation=bool(data.get("venue_recommendation", True)),
         score_history=bool(data.get("score_history", True)),
+        target_venue=str(data.get("target_venue", "CCF-A")),
+        review_target_score=_safe_float(data.get("review_target_score", 6.0), 6.0),
+        max_review_rounds=_safe_int(data.get("max_review_rounds", 4), 4),
+        min_score_improvement=_safe_float(data.get("min_score_improvement", 0.2), 0.2),
     )
 
 

@@ -13,6 +13,11 @@ from typing import Any
 import yaml  # noqa: F401 — available for downstream use
 
 from researchclaw.adapters import AdapterBundle
+from researchclaw.assessor.venue_profiles import (
+    format_venue_rubric,
+    get_venue_profile,
+    resolve_review_target,
+)
 from researchclaw.config import RCConfig
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._domain import _detect_domain  # noqa: F401
@@ -33,6 +38,12 @@ from researchclaw.pipeline._helpers import (
     _topic_constraint_block,  # noqa: F401
     _utcnow_iso,
     reconcile_figure_refs,
+)
+from researchclaw.pipeline.research_governor import (
+    build_phase_charter,
+    build_stage_skill_overlay,
+    infer_editorial_action,
+    write_phase_handoff,
 )
 from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
@@ -131,6 +142,425 @@ def _collect_experiment_evidence(run_dir: Path) -> str:
     )
 
 
+def _review_iteration(run_dir: Path) -> int:
+    ctx_path = run_dir / "iteration_context.json"
+    if not ctx_path.exists():
+        return 1
+    try:
+        data = json.loads(ctx_path.read_text(encoding="utf-8"))
+        iteration = int(data.get("iteration", 1))
+        return iteration if iteration > 0 else 1
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        return 1
+
+
+def _coerce_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _venue_floor_findings(
+    scores: dict[str, float],
+    venue_profile: Any,
+) -> list[str]:
+    findings: list[str] = []
+    label_map = {
+        "novelty": "novelty",
+        "technical_soundness": "technical soundness",
+        "empirical_adequacy": "empirical adequacy",
+        "writing_clarity": "writing clarity",
+        "claim_calibration": "claim calibration",
+    }
+    for key, floor in venue_profile.dimension_floor_map.items():
+        value = _coerce_float(scores.get(key))
+        if value is None or value >= floor:
+            continue
+        findings.append(
+            f"Venue rubric floor miss: {label_map.get(key, key)} scored "
+            f"{value:.1f}/10 below the {venue_profile.label} floor {float(floor):.1f}/10."
+        )
+    return findings
+
+
+def _load_review_loop_state(run_dir: Path) -> dict[str, Any]:
+    text = _read_prior_artifact(run_dir, "review_state.json") or ""
+    data = _safe_json_loads(text, {}) if text else {}
+    return data if isinstance(data, dict) else {}
+
+
+def _read_latest_paper_for_review(run_dir: Path) -> str:
+    revised = _read_prior_artifact(run_dir, "paper_revised.md") or ""
+    if revised.strip():
+        return revised
+    return _read_prior_artifact(run_dir, "paper_draft.md") or ""
+
+
+def _build_score_progress(
+    previous_dimensions: dict[str, Any],
+    current_dimensions: dict[str, float],
+    *,
+    previous_overall: float | None,
+    current_overall: float,
+) -> tuple[dict[str, float], float | None]:
+    deltas: dict[str, float] = {}
+    for key, value in current_dimensions.items():
+        prev = _coerce_float(previous_dimensions.get(key))
+        if prev is None:
+            continue
+        deltas[key] = round(value - prev, 2)
+    overall_delta = (
+        round(current_overall - previous_overall, 2)
+        if previous_overall is not None
+        else None
+    )
+    return deltas, overall_delta
+
+
+def _extract_review_scores(review_text: str) -> tuple[dict[str, float], float]:
+    labels = {
+        "novelty": "novelty",
+        "technical_soundness": "technical_soundness",
+        "technical soundness": "technical_soundness",
+        "empirical_adequacy": "empirical_adequacy",
+        "empirical adequacy": "empirical_adequacy",
+        "writing_clarity": "writing_clarity",
+        "writing clarity": "writing_clarity",
+        "claim_calibration": "claim_calibration",
+        "claim calibration": "claim_calibration",
+        "overall_score": "overall_score",
+        "overall score": "overall_score",
+    }
+    scores: dict[str, float] = {}
+    for raw_line in review_text.splitlines():
+        line = raw_line.strip().lstrip("-* ").strip()
+        m = re.match(r"([A-Za-z_ ][A-Za-z_ ]+?)\s*:\s*(\d+(?:\.\d+)?)\s*/\s*10\b", line)
+        if not m:
+            continue
+        key = labels.get(m.group(1).strip().lower())
+        if not key:
+            continue
+        try:
+            scores[key] = float(m.group(2))
+        except ValueError:
+            continue
+
+    if "overall_score" in scores:
+        overall = scores["overall_score"]
+    elif scores:
+        components = [v for k, v in scores.items() if k != "overall_score"]
+        overall = round(sum(components) / len(components), 2) if components else 6.0
+    else:
+        must_fix_markers = len(re.findall(r"\b(critical|must fix|unsupported|desk reject|fatal)\b", review_text, re.IGNORECASE))
+        should_fix_markers = len(re.findall(r"\b(weakness|concern|clarify|expand|improve|missing)\b", review_text, re.IGNORECASE))
+        overall = max(3.0, min(8.5, 7.2 - 0.45 * must_fix_markers - 0.15 * should_fix_markers))
+    return scores, round(overall, 2)
+
+
+def _extract_review_findings(review_text: str) -> tuple[list[str], list[str]]:
+    must_fix: list[str] = []
+    should_fix: list[str] = []
+    current_reviewer = ""
+    for raw_line in review_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("## Reviewer"):
+            current_reviewer = line.replace("##", "").strip()
+            continue
+        if not line.startswith("- "):
+            continue
+        finding = line[2:].strip()
+        lowered = finding.lower()
+        tagged = f"{current_reviewer}: {finding}" if current_reviewer else finding
+        if any(token in lowered for token in ("critical", "must", "unsupported", "fatal", "desk reject", "missing baseline", "not supported")):
+            must_fix.append(tagged)
+        elif any(token in lowered for token in ("weakness", "concern", "clarify", "expand", "improve", "limited", "underdeveloped", "actionable")):
+            should_fix.append(tagged)
+
+    def _dedupe(items: list[str]) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            key = item.lower()
+            if key not in seen:
+                seen.add(key)
+                result.append(item)
+        return result
+
+    return _dedupe(must_fix), _dedupe(should_fix)
+
+
+def _build_review_state(
+    run_dir: Path,
+    config: RCConfig,
+    review_text: str,
+    *,
+    draft_quality: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], str, str]:
+    venue_profile = get_venue_profile(getattr(config.quality_assessor, "target_venue", "CCF-A"))
+    prior_state = _load_review_loop_state(run_dir)
+    prior_iteration = int(prior_state.get("iteration", 0) or 0)
+    prior_status = str(prior_state.get("status", ""))
+    if prior_iteration > 0 and prior_status in {
+        "revised_pending_re_review",
+        "reviewed_pending_revision",
+    }:
+        iteration = prior_iteration + 1
+    else:
+        iteration = max(_review_iteration(run_dir), 1)
+    scores, overall = _extract_review_scores(review_text)
+    must_fix, should_fix = _extract_review_findings(review_text)
+    configured_target = float(getattr(config.quality_assessor, "review_target_score", 6.0))
+    target_score = resolve_review_target(configured_target, venue_profile)
+    max_rounds = max(1, int(getattr(config.quality_assessor, "max_review_rounds", 4)))
+    min_improvement = float(getattr(config.quality_assessor, "min_score_improvement", 0.2))
+    venue_rubric = format_venue_rubric(venue_profile)
+    venue_floor_findings = _venue_floor_findings(scores, venue_profile)
+    for finding in venue_floor_findings:
+        if finding not in must_fix and finding not in should_fix:
+            must_fix.append(finding)
+
+    if draft_quality:
+        for warning in draft_quality.get("overall_warnings", []):
+            text = f"Draft quality warning: {warning}"
+            if text not in must_fix and text not in should_fix:
+                should_fix.append(text)
+
+    previous_dimensions = prior_state.get("dimensions", {})
+    if not isinstance(previous_dimensions, dict):
+        previous_dimensions = {}
+    previous_overall = _coerce_float(prior_state.get("overall_score"))
+    dimension_deltas, overall_delta = _build_score_progress(
+        previous_dimensions,
+        scores,
+        previous_overall=previous_overall,
+        current_overall=overall,
+    )
+    weakest_dimensions = [
+        key for key, _ in sorted(scores.items(), key=lambda item: item[1])
+        if key != "overall_score"
+    ][:3]
+    remaining_rounds = max(max_rounds - iteration, 0)
+    reached_target = overall >= target_score
+    enough_improvement = overall_delta is None or overall_delta >= min_improvement
+    needs_revision = bool(must_fix) or not reached_target
+    editorial_action, editorial_reason = infer_editorial_action(
+        review_text=review_text,
+        scores=scores,
+        must_fix=must_fix,
+        venue_profile=venue_profile,
+    )
+    review_outcome = (
+        "ready_for_gate"
+        if not needs_revision
+        else ("revise_again" if iteration < max_rounds else "max_rounds_reached")
+    )
+
+    findings_md_lines = [
+        "# Findings",
+        "",
+        "## Must Fix",
+    ]
+    if must_fix:
+        findings_md_lines.extend(f"- [ ] {item}" for item in must_fix)
+    else:
+        findings_md_lines.append("- [ ] No critical blocker extracted from this review round.")
+    findings_md_lines.extend(["", "## Should Fix"])
+    if should_fix:
+        findings_md_lines.extend(f"- [ ] {item}" for item in should_fix)
+    else:
+        findings_md_lines.append("- [ ] No secondary issue extracted from this review round.")
+    findings_md = "\n".join(findings_md_lines) + "\n"
+
+    state = {
+        "iteration": iteration,
+        "status": "reviewed_pending_revision",
+        "overall_score": overall,
+        "dimensions": scores,
+        "target_venue": venue_profile.label,
+        "configured_target_score": configured_target,
+        "venue_target_score": venue_profile.target_review_score,
+        "target_score": target_score,
+        "max_review_rounds": max_rounds,
+        "remaining_rounds": remaining_rounds,
+        "score_gap": round(max(target_score - overall, 0.0), 2),
+        "overall_delta": overall_delta,
+        "dimension_deltas": dimension_deltas,
+        "weakest_dimensions": weakest_dimensions,
+        "score_improved_enough": enough_improvement,
+        "review_outcome": review_outcome,
+        "editorial_action": editorial_action,
+        "editorial_reason": editorial_reason,
+        "venue_rubric": venue_rubric,
+        "dimension_floors": venue_profile.dimension_floor_map,
+        "must_fix": must_fix,
+        "should_fix": should_fix,
+        "open_findings": len(must_fix) + len(should_fix),
+        "generated": _utcnow_iso(),
+    }
+
+    auto_review_lines = [
+        "# Auto Review",
+        "",
+        f"- Iteration: {iteration}",
+        f"- Overall score: {overall}/10",
+        f"- Target score: {target_score}/10",
+        f"- Venue target floor: {venue_profile.target_review_score}/10",
+        f"- Target venue: {venue_profile.label}",
+        f"- Review outcome: {review_outcome}",
+        f"- Editorial action: {editorial_action}",
+        f"- Open findings: {state['open_findings']}",
+        "",
+        "## Scorecard",
+    ]
+    if scores:
+        for key, value in scores.items():
+            auto_review_lines.append(f"- {key}: {value}/10")
+    else:
+        auto_review_lines.append("- No explicit scorecard in review text; overall score inferred heuristically.")
+    auto_review_lines.extend(["", "## Score Progress"])
+    if overall_delta is not None:
+        auto_review_lines.append(f"- Overall delta vs previous round: {overall_delta:+.2f}")
+    else:
+        auto_review_lines.append("- Overall delta vs previous round: N/A (first scored round)")
+    if dimension_deltas:
+        for key, value in sorted(dimension_deltas.items()):
+            auto_review_lines.append(f"- {key}: {value:+.2f}")
+    else:
+        auto_review_lines.append("- No prior dimension baseline available.")
+    auto_review_lines.extend(["", "## Venue Rubric"])
+    auto_review_lines.extend(venue_rubric.splitlines() or ["- None."])
+    auto_review_lines.extend(["", "## Weakest Dimensions"])
+    if weakest_dimensions:
+        auto_review_lines.extend(f"- {item}" for item in weakest_dimensions)
+    else:
+        auto_review_lines.append("- None.")
+    auto_review_lines.extend(["", "## Editorial Rationale", f"- {editorial_reason}"])
+    auto_review_lines.extend(["", "## Must Fix"])
+    if must_fix:
+        auto_review_lines.extend(f"- {item}" for item in must_fix)
+    else:
+        auto_review_lines.append("- None.")
+    auto_review_lines.extend(["", "## Should Fix"])
+    if should_fix:
+        auto_review_lines.extend(f"- {item}" for item in should_fix)
+    else:
+        auto_review_lines.append("- None.")
+    auto_review_lines.extend(
+        [
+            "",
+            "## Revision Guidance",
+            "- Fix must-fix findings before style polish.",
+            "- Raise the weakest dimensions first; broad rewrites without score impact are lower priority.",
+            "- Reduce claim scope if evidence does not directly support the strongest wording.",
+            "- Prefer one clean revision pass over broad rewrites that lose content.",
+            f"- Stop only when the paper is at or above {target_score}/10 and must-fix findings are closed.",
+            "",
+        ]
+    )
+    auto_review_md = "\n".join(auto_review_lines)
+    return state, auto_review_md, findings_md
+
+
+def _write_review_loop_files(
+    *,
+    stage_dir: Path,
+    run_dir: Path,
+    state: dict[str, Any],
+    auto_review_md: str,
+    findings_md: str,
+) -> None:
+    stage_state_path = stage_dir / "review_state.json"
+    stage_auto_review_path = stage_dir / "auto_review.md"
+    stage_findings_path = stage_dir / "findings.md"
+    stage_score_path = stage_dir / "paper_score.json"
+
+    stage_state_path.write_text(
+        json.dumps(state, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    stage_auto_review_path.write_text(auto_review_md, encoding="utf-8")
+    stage_findings_path.write_text(findings_md, encoding="utf-8")
+    stage_score_path.write_text(
+        json.dumps(
+            {
+                "iteration": state.get("iteration"),
+                "target_venue": state.get("target_venue"),
+                "overall_score": state.get("overall_score"),
+                "target_score": state.get("target_score"),
+                "venue_target_score": state.get("venue_target_score"),
+                "dimensions": state.get("dimensions", {}),
+                "dimension_floors": state.get("dimension_floors", {}),
+                "dimension_deltas": state.get("dimension_deltas", {}),
+                "overall_delta": state.get("overall_delta"),
+                "weakest_dimensions": state.get("weakest_dimensions", []),
+                "review_outcome": state.get("review_outcome"),
+                "generated": state.get("generated"),
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    (run_dir / "REVIEW_STATE.json").write_text(
+        json.dumps(state, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (run_dir / "AUTO_REVIEW.md").write_text(auto_review_md, encoding="utf-8")
+    (run_dir / "findings.md").write_text(findings_md, encoding="utf-8")
+    (run_dir / "PAPER_SCORE.json").write_text(
+        stage_score_path.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+
+def _append_score_history(run_dir: Path, state: dict[str, Any]) -> None:
+    history_path = run_dir / "score_history.md"
+    line = (
+        f"| {state.get('iteration', 1)} | {state.get('overall_score', 'N/A')} | "
+        f"{state.get('overall_delta', 'N/A')} | {state.get('open_findings', 0)} | "
+        f"{state.get('review_outcome', state.get('status', ''))} | {state.get('generated', '')} |\n"
+    )
+    if not history_path.exists():
+        history_path.write_text(
+            "# Score History\n\n| Iteration | Overall Score | Delta | Open Findings | Outcome | Generated |\n| --- | --- | --- | --- | --- | --- |\n",
+            encoding="utf-8",
+        )
+    with history_path.open("a", encoding="utf-8") as handle:
+        handle.write(line)
+
+
+def _build_revision_loop_context(run_dir: Path) -> str:
+    parts: list[str] = []
+    review_state = _read_prior_artifact(run_dir, "review_state.json")
+    if review_state:
+        parts.append(f"## Review State\n```json\n{review_state[:2500]}\n```")
+    paper_score = _read_prior_artifact(run_dir, "paper_score.json")
+    if paper_score:
+        parts.append(f"## Paper Score\n```json\n{paper_score[:2500]}\n```")
+    auto_review = _read_prior_artifact(run_dir, "auto_review.md")
+    if auto_review:
+        parts.append(f"## Auto Review Summary\n{auto_review[:2500]}")
+    findings = _read_prior_artifact(run_dir, "findings.md")
+    if findings:
+        parts.append(f"## Findings Checklist\n{findings[:2500]}")
+    score_history_path = run_dir / "score_history.md"
+    if score_history_path.exists():
+        try:
+            score_history = score_history_path.read_text(encoding="utf-8")
+            parts.append(f"## Score History\n{score_history[-2000:]}")
+        except OSError:
+            pass
+    if not parts:
+        return ""
+    return "\n\n".join(parts) + "\n\n"
+
+
 # ---------------------------------------------------------------------------
 # Stage 18: Peer Review
 # ---------------------------------------------------------------------------
@@ -144,8 +574,11 @@ def _execute_peer_review(
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
 ) -> StageResult:
-    draft = _read_prior_artifact(run_dir, "paper_draft.md") or ""
+    draft = _read_latest_paper_for_review(run_dir)
     experiment_evidence = _collect_experiment_evidence(run_dir)
+    claims_from_results = _read_prior_artifact(run_dir, "claims_from_results.md") or ""
+    draft_quality_payload: dict[str, Any] | None = None
+    venue_profile = get_venue_profile(getattr(config.quality_assessor, "target_venue", "CCF-A"))
 
     # Load draft quality warnings from Stage 17 (if available)
     _quality_suffix = ""
@@ -153,6 +586,8 @@ def _execute_peer_review(
     if _quality_json_path and _quality_json_path.exists():
         try:
             _dq = json.loads(_quality_json_path.read_text(encoding="utf-8"))
+            if isinstance(_dq, dict):
+                draft_quality_payload = _dq
             _dq_warnings = _dq.get("overall_warnings", [])
             if _dq_warnings:
                 _quality_suffix = (
@@ -165,13 +600,24 @@ def _execute_peer_review(
 
     if llm is not None:
         _pm = prompts or PromptManager()
-        _overlay = _get_evolution_overlay(run_dir, "peer_review")
+        _context = "\n\n".join((draft[:3000], claims_from_results[:1200], experiment_evidence[:1200]))
+        _overlay = (
+            _get_evolution_overlay(run_dir, "peer_review")
+            + "\n"
+            + build_phase_charter("peer_review", venue_profile)
+            + "\n"
+            + build_stage_skill_overlay(config, stage_name="peer_review", context=_context)
+        )
         sp = _pm.for_stage(
             "peer_review",
             evolution_overlay=_overlay,
             topic=config.research.topic,
             draft=draft,
             experiment_evidence=experiment_evidence,
+            claims_from_results=claims_from_results,
+            target_venue=venue_profile.label,
+            venue_profile="\n".join(f"- {item}" for item in venue_profile.hard_requirements),
+            venue_rubric=format_venue_rubric(venue_profile),
         )
         _review_user = sp.user + _quality_suffix
         resp = _chat_with_prompt(
@@ -196,11 +642,42 @@ def _execute_peer_review(
 - Actionable revisions: Expand limitations and broader impact.
 """
     (stage_dir / "reviews.md").write_text(reviews, encoding="utf-8")
+    review_state, auto_review_md, findings_md = _build_review_state(
+        run_dir,
+        config,
+        reviews,
+        draft_quality=draft_quality_payload,
+    )
+    _write_review_loop_files(
+        stage_dir=stage_dir,
+        run_dir=run_dir,
+        state=review_state,
+        auto_review_md=auto_review_md,
+        findings_md=findings_md,
+    )
+    write_phase_handoff(
+        stage_dir / "phase3_editorial_memo.md",
+        "Phase 3 Editorial Memo",
+        {
+            "Venue": review_state.get("target_venue", venue_profile.label),
+            "Editorial Action": f"{review_state.get('editorial_action', 'revise_paper')}\n\n{review_state.get('editorial_reason', '')}",
+            "Open Findings": "\n".join(f"- {item}" for item in review_state.get("must_fix", [])) or "- None.",
+        },
+    )
+    if config.quality_assessor.score_history:
+        _append_score_history(run_dir, review_state)
     return StageResult(
         stage=Stage.PEER_REVIEW,
         status=StageStatus.DONE,
-        artifacts=("reviews.md",),
-        evidence_refs=("stage-18/reviews.md",),
+        artifacts=("reviews.md", "auto_review.md", "findings.md", "review_state.json", "paper_score.json", "phase3_editorial_memo.md"),
+        evidence_refs=(
+            "stage-18/reviews.md",
+            "stage-18/auto_review.md",
+            "stage-18/findings.md",
+            "stage-18/review_state.json",
+            "stage-18/paper_score.json",
+            "stage-18/phase3_editorial_memo.md",
+        ),
     )
 
 
@@ -217,9 +694,11 @@ def _execute_paper_revision(
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
 ) -> StageResult:
-    draft = _read_prior_artifact(run_dir, "paper_draft.md") or ""
+    draft = _read_latest_paper_for_review(run_dir)
     reviews = _read_prior_artifact(run_dir, "reviews.md") or ""
+    review_loop_context = _build_revision_loop_context(run_dir)
     draft_word_count = len(draft.split())
+    venue_profile = get_venue_profile(getattr(config.quality_assessor, "target_venue", "CCF-A"))
 
     # R4-2: Collect real metrics for anti-fabrication guard in revision
     # BUG-47: _collect_raw_experiment_metrics returns tuple[str, bool], must unpack
@@ -266,13 +745,28 @@ def _execute_paper_revision(
                 pass
 
         _overlay = _get_evolution_overlay(run_dir, "paper_revision")
+        _overlay = (
+            _overlay
+            + "\n"
+            + build_phase_charter("paper_revision", venue_profile)
+            + "\n"
+            + build_stage_skill_overlay(
+                config,
+                stage_name="paper_revision",
+                context="\n\n".join((reviews[:2000], review_loop_context[:2000], draft[:2500])),
+            )
+        )
         sp = _pm.for_stage(
             "paper_revision",
             evolution_overlay=_overlay,
             topic_constraint=_pm.block("topic_constraint", topic=config.research.topic),
             writing_structure=_ws_revision,
+            review_loop_context=review_loop_context,
             draft=draft,
             reviews=_quality_prefix + reviews + data_integrity_revision,
+            target_venue=venue_profile.label,
+            venue_profile="\n".join(f"- {item}" for item in venue_profile.hard_requirements),
+            venue_rubric=format_venue_rubric(venue_profile),
             **_rev_blocks,
         )
         # R10-Fix2: Ensure max_tokens is sufficient for full paper revision
@@ -355,11 +849,68 @@ def _execute_paper_revision(
     else:
         revised = draft
     (stage_dir / "paper_revised.md").write_text(revised, encoding="utf-8")
+    review_state = _load_review_loop_state(run_dir)
+    audit_lines = [
+        "# Review Comment Audit",
+        "",
+        f"- Target venue: {venue_profile.label}",
+        f"- Editorial action: {review_state.get('editorial_action', 'revise_paper')}",
+        "",
+        "## Apply Directly",
+    ]
+    for item in review_state.get("must_fix", []):
+        audit_lines.append(f"- {item}")
+    audit_lines.extend(["", "## Challenge or Narrow", "- Reject comments that demand unsupported scope expansion or claims not justified by the paper's actual goal."])
+    if review_state.get("editorial_action") == "supplement_experiments":
+        audit_lines.append("- Reviewer demands on empirical support are likely valid; supplement experiments before polishing prose.")
+    if review_state.get("editorial_action") == "rework_innovation":
+        audit_lines.append("- Reviewer novelty concerns are likely valid; revisit the innovation framing or the method itself.")
+    (stage_dir / "review_comment_audit.md").write_text(
+        "\n".join(audit_lines) + "\n",
+        encoding="utf-8",
+    )
+    revision_response = (
+        "# Revision Response\n\n"
+        "## Inputs Used\n"
+        "- reviews.md\n"
+        "- auto_review.md\n"
+        "- findings.md\n"
+        "- review_state.json\n"
+        "- review_comment_audit.md\n\n"
+        "## Revision Priorities\n"
+        + (review_loop_context[:3000] if review_loop_context else "- No review loop context available.\n")
+    )
+    (stage_dir / "revision_response.md").write_text(revision_response, encoding="utf-8")
+    prior_state_text = _read_prior_artifact(run_dir, "review_state.json") or ""
+    prior_state = _safe_json_loads(prior_state_text, {}) if prior_state_text else {}
+    updated_state = dict(prior_state) if isinstance(prior_state, dict) else {}
+    updated_state["status"] = "revised_pending_re_review"
+    updated_state["revision_generated"] = _utcnow_iso()
+    updated_state["revision_response_path"] = "stage-19/revision_response.md"
+    updated_state["latest_paper_path"] = "stage-19/paper_revised.md"
+    updated_state["next_action"] = (
+        "re_review" if updated_state.get("review_outcome") != "ready_for_gate" else "quality_gate"
+    )
+    if "iteration" not in updated_state:
+        updated_state["iteration"] = _review_iteration(run_dir)
+    (stage_dir / "review_state.json").write_text(
+        json.dumps(updated_state, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (run_dir / "REVIEW_STATE.json").write_text(
+        json.dumps(updated_state, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     return StageResult(
         stage=Stage.PAPER_REVISION,
         status=StageStatus.DONE,
-        artifacts=("paper_revised.md",),
-        evidence_refs=("stage-19/paper_revised.md",),
+        artifacts=("paper_revised.md", "revision_response.md", "review_state.json", "review_comment_audit.md"),
+        evidence_refs=(
+            "stage-19/paper_revised.md",
+            "stage-19/revision_response.md",
+            "stage-19/review_state.json",
+            "stage-19/review_comment_audit.md",
+        ),
     )
 
 
@@ -378,6 +929,7 @@ def _execute_quality_gate(
 ) -> StageResult:
     revised = _read_prior_artifact(run_dir, "paper_revised.md") or ""
     report: dict[str, Any] | None = None
+    venue_profile = get_venue_profile(getattr(config.quality_assessor, "target_venue", "CCF-A"))
 
     # BUG-25 + BUG-180: Load the RICHEST experiment summary for cross-checking.
     # _read_prior_artifact returns the first match in reverse-sorted order,
@@ -464,12 +1016,25 @@ def _execute_quality_gate(
                 "fabrication. Penalize severely.\n"
             )
 
-        _overlay = _get_evolution_overlay(run_dir, "quality_gate")
+        _overlay = (
+            _get_evolution_overlay(run_dir, "quality_gate")
+            + "\n"
+            + build_phase_charter("quality_gate", venue_profile)
+            + "\n"
+            + build_stage_skill_overlay(
+                config,
+                stage_name="quality_gate",
+                context=revised[:3000],
+            )
+        )
         sp = _pm.for_stage(
             "quality_gate",
             evolution_overlay=_overlay,
             quality_threshold=str(config.research.quality_threshold),
             revised=paper_for_eval + _exp_context,
+            target_venue=venue_profile.label,
+            venue_profile="\n".join(f"- {item}" for item in venue_profile.hard_requirements),
+            venue_rubric=format_venue_rubric(venue_profile),
         )
         resp = _chat_with_prompt(
             llm,
@@ -572,6 +1137,91 @@ def _execute_quality_gate(
     (stage_dir / "fabrication_flags.json").write_text(
         json.dumps(_fabrication_info, indent=2), encoding="utf-8"
     )
+
+    review_state = _load_review_loop_state(run_dir)
+    review_iteration = max(1, int(review_state.get("iteration", 1) or 1))
+    configured_target = float(getattr(config.quality_assessor, "review_target_score", 6.0))
+    review_target = float(
+        review_state.get(
+            "target_score",
+            resolve_review_target(configured_target, venue_profile),
+        )
+        or resolve_review_target(configured_target, venue_profile)
+    )
+    review_max_rounds = max(
+        1,
+        int(
+            review_state.get(
+                "max_review_rounds",
+                getattr(config.quality_assessor, "max_review_rounds", 4),
+            )
+            or getattr(config.quality_assessor, "max_review_rounds", 4)
+        ),
+    )
+    review_overall = _coerce_float(review_state.get("overall_score"))
+    review_open_findings = int(review_state.get("open_findings", 0) or 0)
+    review_outcome = str(review_state.get("review_outcome", "") or "")
+
+    if (
+        review_overall is not None
+        and (
+            review_overall < review_target
+            or review_open_findings > 0
+            or review_outcome == "revise_again"
+        )
+        and review_iteration < review_max_rounds
+    ):
+        editorial_action = str(review_state.get("editorial_action", "revise_paper") or "revise_paper")
+        decision = "review_revise"
+        rollback_target = int(Stage.PEER_REVIEW)
+        if editorial_action == "supplement_experiments":
+            decision = "editorial_experiment_refine"
+            rollback_target = int(Stage.EXPERIMENT_DESIGN)
+        elif editorial_action == "rework_innovation":
+            decision = "editorial_pivot"
+            rollback_target = int(Stage.HYPOTHESIS_GEN)
+        loop_signal = {
+            "decision": decision,
+            "reason": (
+                f"review score {review_overall:.2f}/10 below target "
+                f"{review_target:.2f}/10 or findings remain open"
+            ),
+            "iteration": review_iteration,
+            "max_review_rounds": review_max_rounds,
+            "rollback_target": rollback_target,
+            "editorial_action": editorial_action,
+            "open_findings": review_open_findings,
+            "generated": _utcnow_iso(),
+        }
+        (stage_dir / "review_loop_gate.json").write_text(
+            json.dumps(loop_signal, indent=2), encoding="utf-8"
+        )
+        logger.info(
+            "Quality gate requested review loop retry: review score %.2f/10, open findings=%d, round %d/%d",
+            review_overall,
+            review_open_findings,
+            review_iteration,
+            review_max_rounds,
+        )
+        return StageResult(
+            stage=Stage.QUALITY_GATE,
+            status=StageStatus.DONE,
+            artifacts=("quality_report.json", "fabrication_flags.json", "review_loop_gate.json"),
+            evidence_refs=("stage-20/quality_report.json", "stage-20/review_loop_gate.json"),
+            decision=decision,
+        )
+
+    if (
+        review_overall is not None
+        and review_overall < review_target
+        and review_iteration >= review_max_rounds
+    ):
+        report.setdefault("weaknesses", []).append(
+            "Review loop exhausted without reaching target review score."
+        )
+        (stage_dir / "quality_report.json").write_text(
+            json.dumps(report, indent=2), encoding="utf-8"
+        )
 
     if isinstance(score, (int, float)) and score < threshold:
         if config.research.graceful_degradation:
@@ -676,6 +1326,39 @@ def _execute_knowledge_archive(
 Generated: {_utcnow_iso()}
 """
     (stage_dir / "archive.md").write_text(archive, encoding="utf-8")
+    learned_lines = [
+        "# Learned Skills Summary",
+        "",
+        "## Built During This Run",
+    ]
+    skills_dir = Path(getattr(config.metaclaw_bridge, "skills_dir", "~/.metaclaw/skills")).expanduser()
+    if skills_dir.exists():
+        arc_skills = sorted(p.name for p in skills_dir.iterdir() if p.is_dir() and p.name.startswith("arc-"))
+        if arc_skills:
+            learned_lines.extend(f"- {name}" for name in arc_skills[:20])
+        else:
+            learned_lines.append("- No generated arc-* skills found.")
+    else:
+        learned_lines.append("- Skill directory not present.")
+    learned_lines.extend(["", "## Skill Effectiveness"])
+    try:
+        from researchclaw.metaclaw_bridge.skill_feedback import SkillFeedbackStore
+
+        store = SkillFeedbackStore(run_dir / "evolution" / "skill_effectiveness.jsonl")
+        stats = store.compute_skill_stats()
+        if stats:
+            for name, stat in sorted(stats.items(), key=lambda item: (-float(item[1]["success_rate"]), item[0]))[:20]:
+                learned_lines.append(
+                    f"- {name}: success_rate={float(stat['success_rate']):.2f}, total={int(stat['total'])}"
+                )
+        else:
+            learned_lines.append("- No skill effectiveness records yet.")
+    except Exception:
+        learned_lines.append("- Skill effectiveness summary unavailable.")
+    (stage_dir / "learned_skills_summary.md").write_text(
+        "\n".join(learned_lines) + "\n",
+        encoding="utf-8",
+    )
 
     files: list[str] = []
     for stage_subdir in sorted(run_dir.glob("stage-*")):
@@ -694,7 +1377,7 @@ Generated: {_utcnow_iso()}
     return StageResult(
         stage=Stage.KNOWLEDGE_ARCHIVE,
         status=StageStatus.DONE,
-        artifacts=("archive.md", "bundle_index.json"),
+        artifacts=("archive.md", "bundle_index.json", "learned_skills_summary.md"),
         evidence_refs=("stage-21/archive.md", "stage-21/bundle_index.json"),
     )
 

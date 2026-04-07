@@ -37,6 +37,22 @@ class FakeLLMClientWithConfig(FakeLLMClient):
         )
 
 
+class SequenceLLMClient(FakeLLMClient):
+    def __init__(self, responses: list[str]):
+        super().__init__(response_text=responses[0] if responses else "mock response")
+        self._responses = list(responses)
+
+    def chat(self, messages: list[dict[str, str]], **kwargs: object):
+        self.calls.append(messages)
+        from researchclaw.llm.client import LLMResponse
+
+        if self._responses:
+            content = self._responses.pop(0)
+        else:
+            content = self.response_text
+        return LLMResponse(content=content, model="fake-model")
+
+
 @pytest.fixture()
 def rc_config(tmp_path: Path) -> RCConfig:
     data = {
@@ -192,6 +208,27 @@ def test_build_context_preamble_includes_selected_prior_artifacts(
     assert "hyp content" in text
     assert "### Synthesis" in text
     assert "synth content" in text
+
+
+def test_build_context_preamble_includes_anchor_claims_and_matrix(
+    rc_config: RCConfig, run_dir: Path
+) -> None:
+    _write_prior_artifact(run_dir, 2, "problem_anchor.md", "anchor content")
+    _write_prior_artifact(run_dir, 9, "claims_evidence_matrix.md", "matrix content")
+    _write_prior_artifact(run_dir, 15, "claims_from_results.md", "claim gate content")
+    text = rc_executor._build_context_preamble(
+        rc_config,
+        run_dir,
+        include_problem_anchor=True,
+        include_claim_matrix=True,
+        include_claims=True,
+    )
+    assert "### Problem Anchor" in text
+    assert "anchor content" in text
+    assert "### Claims-Evidence Matrix" in text
+    assert "matrix content" in text
+    assert "### Claims From Results" in text
+    assert "claim gate content" in text
 
 
 def test_read_prior_artifact_finds_newest_file(run_dir: Path) -> None:
@@ -1254,6 +1291,461 @@ class TestResearchDecisionStructured:
         )
         assert result.decision == "proceed"
 
+    def test_decision_generates_claims_from_results_artifacts(
+        self, tmp_path: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-15"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 2, "problem_anchor.md", "# Problem Anchor\nAnchor")
+        _write_prior_artifact(run_dir, 8, "hypotheses.md", "## Hypothesis\nMethod A should outperform baseline B.")
+        _write_prior_artifact(run_dir, 9, "claims_evidence_matrix.md", "# Claims-Evidence Matrix\n## C1\n- Claim: Method A beats baseline B.")
+        _write_prior_artifact(run_dir, 14, "analysis.md", "# Analysis\nMethod A improves accuracy over baseline B.")
+        _write_prior_artifact(run_dir, 14, "experiment_summary.json", json.dumps({"metrics_summary": {"accuracy": {"mean": 0.8, "count": 5}}}))
+        llm = SequenceLLMClient(
+            [
+                "# Claims From Results\n\n## Supported Claims\n- Method A beats baseline B.\n\n## Partially Supported Claims\n- None.\n\n## Unsupported or Rejected Claims\n- None.\n\n## Missing Evidence\n- More robustness tests.\n\n## Paper Positioning Guidance\n- Keep claims narrow.\n",
+                "## Decision\nPROCEED\n## Justification\nSupported claims exist.\n## Evidence\nReal metrics.\n## Next Actions\nWrite the paper.\n",
+            ]
+        )
+        result = rc_executor._execute_research_decision(
+            stage_dir, run_dir, rc_config, adapters, llm=llm
+        )
+        assert result.decision == "proceed"
+        assert "claims_from_results.md" in result.artifacts
+        assert (stage_dir / "claims_from_results.md").exists()
+        claims_payload = json.loads((stage_dir / "claims_from_results.json").read_text())
+        assert "Method A beats baseline B." in claims_payload["supported_claims"]
+        assert len(llm.calls) == 2
+
+
+class TestProblemAnchorAndClaimMatrix:
+    def test_problem_decompose_writes_problem_anchor(
+        self, tmp_path: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-02"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 1, "goal.md", "# Goal\nFind a better algorithm.")
+
+        result = rc_executor._execute_problem_decompose(
+            stage_dir, run_dir, rc_config, adapters, llm=None
+        )
+
+        assert result.status == StageStatus.DONE
+        assert "problem_anchor.md" in result.artifacts
+        anchor_text = (stage_dir / "problem_anchor.md").read_text(encoding="utf-8")
+        assert "Core Question" in anchor_text
+        assert "Dominant Contribution" in anchor_text
+
+    def test_experiment_design_writes_claims_evidence_matrix(
+        self, tmp_path: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-09"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 1, "goal.md", "# Goal\nBetter method.")
+        _write_prior_artifact(run_dir, 2, "problem_anchor.md", "# Problem Anchor\nFocus on baseline weakness.")
+        _write_prior_artifact(
+            run_dir,
+            8,
+            "hypotheses.md",
+            "## Hypothesis 1\nA structured latent update should improve accuracy over the baseline.\n",
+        )
+        llm = FakeLLMClient(
+            "objectives:\n  - compare methods\n"
+            "datasets:\n  - benchmark_a\n"
+            "baselines:\n  - baseline_b\n"
+            "proposed_methods:\n  - latent_update_net\n"
+            "ablations:\n  - no_latent_update\n"
+            "metrics:\n  - accuracy\n"
+            "risks:\n  - overfitting\n"
+            "compute_budget:\n  max_gpu: 1\n  max_hours: 2\n"
+        )
+
+        result = rc_executor._execute_experiment_design(
+            stage_dir, run_dir, rc_config, adapters, llm=llm
+        )
+
+        assert result.status == StageStatus.DONE
+        assert "claims_evidence_matrix.md" in result.artifacts
+        matrix_text = (stage_dir / "claims_evidence_matrix.md").read_text(encoding="utf-8")
+        assert "Claims-Evidence Matrix" in matrix_text
+        assert "latent_update_net" in matrix_text
+        matrix_payload = json.loads((stage_dir / "claims_evidence_matrix.json").read_text())
+        assert matrix_payload["claims"][0]["proposed_methods"] == ["latent_update_net"]
+
+
+class TestAutoReviewLoopLite:
+    def test_peer_review_writes_review_loop_artifacts(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        _write_prior_artifact(run_dir, 17, "paper_draft.md", "# Draft\n\nA full paper draft.")
+        _write_prior_artifact(run_dir, 15, "claims_from_results.md", "# Claims From Results\n- Narrow claim.")
+        _write_prior_artifact(
+            run_dir,
+            17,
+            "draft_quality.json",
+            json.dumps({"overall_warnings": ["Results section is thin"]}),
+        )
+        stage_dir = run_dir / "stage-18"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        llm = FakeLLMClient(
+            "## Scorecard\n"
+            "- novelty: 7/10\n"
+            "- technical_soundness: 6/10\n"
+            "- empirical_adequacy: 5/10\n"
+            "- writing_clarity: 7/10\n"
+            "- claim_calibration: 6/10\n"
+            "- overall_score: 6/10\n\n"
+            "## Top Findings\n"
+            "- Must fix unsupported comparison claim in abstract.\n\n"
+            "## Reviewer A\n"
+            "- Strengths: Clear setup.\n"
+            "- Weaknesses: Missing baseline fairness discussion.\n"
+            "- Actionable revisions: Expand baseline analysis.\n"
+        )
+
+        result = rc_executor._execute_peer_review(
+            stage_dir, run_dir, rc_config, adapters, llm=llm
+        )
+
+        assert result.status == StageStatus.DONE
+        assert "review_state.json" in result.artifacts
+        assert (stage_dir / "auto_review.md").exists()
+        assert (stage_dir / "findings.md").exists()
+        assert (run_dir / "REVIEW_STATE.json").exists()
+        assert (run_dir / "score_history.md").exists()
+        assert (stage_dir / "paper_score.json").exists()
+        state = json.loads((stage_dir / "review_state.json").read_text(encoding="utf-8"))
+        assert state["overall_score"] == 6.0
+        assert state["target_score"] == 8.0
+        assert state["venue_target_score"] == 8.0
+        assert "Acceptance bar" in state["venue_rubric"]
+        assert state["review_outcome"] == "revise_again"
+        assert state["open_findings"] >= 1
+
+    def test_paper_revision_uses_review_loop_context_and_updates_state(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        _write_prior_artifact(run_dir, 17, "paper_draft.md", "# Draft\n\nOriginal text.")
+        _write_prior_artifact(run_dir, 18, "reviews.md", "# Reviews\n- Fix claim calibration.")
+        _write_prior_artifact(run_dir, 18, "auto_review.md", "# Auto Review\n- Overall score: 6/10")
+        _write_prior_artifact(run_dir, 18, "findings.md", "# Findings\n- [ ] Fix claim calibration.")
+        _write_prior_artifact(
+            run_dir,
+            18,
+            "review_state.json",
+            json.dumps({"iteration": 1, "status": "reviewed_pending_revision", "overall_score": 6.0}),
+        )
+        stage_dir = run_dir / "stage-19"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        result = rc_executor._execute_paper_revision(
+            stage_dir, run_dir, rc_config, adapters, llm=None
+        )
+
+        assert result.status == StageStatus.DONE
+        assert (stage_dir / "revision_response.md").exists()
+        updated_state = json.loads((stage_dir / "review_state.json").read_text(encoding="utf-8"))
+        assert updated_state["status"] == "revised_pending_re_review"
+        assert (run_dir / "REVIEW_STATE.json").exists()
+
+    def test_peer_review_prefers_latest_revised_paper(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        _write_prior_artifact(run_dir, 17, "paper_draft.md", "# Draft\n\nOld draft content.")
+        _write_prior_artifact(run_dir, 19, "paper_revised.md", "# Revised\n\nNew revised content.")
+        stage_dir = run_dir / "stage-18"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        llm = FakeLLMClient(
+            "## Scorecard\n"
+            "- novelty: 7/10\n"
+            "- technical_soundness: 7/10\n"
+            "- empirical_adequacy: 7/10\n"
+            "- writing_clarity: 7/10\n"
+            "- claim_calibration: 7/10\n"
+            "- overall_score: 7/10\n"
+        )
+
+        result = rc_executor._execute_peer_review(
+            stage_dir, run_dir, rc_config, adapters, llm=llm
+        )
+
+        assert result.status == StageStatus.DONE
+        prompt = "\n".join(msg.get("content", "") for msg in llm.calls[0])
+        assert "New revised content." in prompt
+        assert "Old draft content." not in prompt
+
+    def test_quality_gate_requests_review_revise_when_score_below_target(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        _write_prior_artifact(run_dir, 19, "paper_revised.md", "# Revised\n\nBody.")
+        _write_prior_artifact(
+            run_dir,
+            18,
+            "review_state.json",
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "overall_score": 5.8,
+                    "target_score": 6.5,
+                    "max_review_rounds": 4,
+                    "open_findings": 2,
+                    "review_outcome": "revise_again",
+                }
+            ),
+        )
+        stage_dir = run_dir / "stage-20"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        result = rc_executor._execute_quality_gate(
+            stage_dir, run_dir, rc_config, adapters, llm=None
+        )
+
+        assert result.status == StageStatus.DONE
+        assert result.decision == "review_revise"
+        assert (stage_dir / "review_loop_gate.json").exists()
+
+    def test_quality_gate_routes_to_experiment_refine_for_empirical_gap(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        _write_prior_artifact(run_dir, 19, "paper_revised.md", "# Revised\n\nBody.")
+        _write_prior_artifact(
+            run_dir,
+            18,
+            "review_state.json",
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "overall_score": 5.9,
+                    "target_score": 8.0,
+                    "max_review_rounds": 4,
+                    "open_findings": 3,
+                    "review_outcome": "revise_again",
+                    "editorial_action": "supplement_experiments",
+                }
+            ),
+        )
+        stage_dir = run_dir / "stage-20"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        result = rc_executor._execute_quality_gate(
+            stage_dir, run_dir, rc_config, adapters, llm=None
+        )
+
+        assert result.status == StageStatus.DONE
+        assert result.decision == "editorial_experiment_refine"
+
+
+class TestPhaseThreeCompactArtifacts:
+    def test_literature_collect_uses_note_seed_and_writes_digest(
+        self, tmp_path: Path, adapters: AdapterBundle, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import researchclaw.literature.search as lit_search
+        import researchclaw.data as rc_data
+
+        monkeypatch.setattr(lit_search, "search_papers_multi_query", lambda *args, **kwargs: [])
+        monkeypatch.setattr(rc_data, "load_seminal_papers", lambda topic: [])
+
+        note_dir = tmp_path / "notes"
+        note_dir.mkdir(parents=True)
+        (note_dir / "baseline_note.md").write_text(
+            "# Seed Note\nThis note describes a structured prior and a baseline failure mode.",
+            encoding="utf-8",
+        )
+        kb_root = tmp_path / "kb"
+        for name in ("questions", "literature", "experiments", "findings", "decisions", "reviews"):
+            (kb_root / name).mkdir(parents=True, exist_ok=True)
+        config = RCConfig.from_dict(
+            {
+                "project": {"name": "demo", "mode": "docs-first"},
+                "research": {
+                    "topic": "structured priors for planning",
+                    "domains": ["ml"],
+                    "note_seed_paths": [str(note_dir)],
+                    "max_seed_docs": 6,
+                },
+                "runtime": {"timezone": "UTC"},
+                "notifications": {"channel": "console"},
+                "knowledge_base": {"backend": "markdown", "root": str(kb_root)},
+                "openclaw_bridge": {},
+                "llm": {"provider": "acp", "acp": {"agent": "codex"}},
+                "experiment": {"mode": "simulated"},
+                "web_search": {"enabled": False},
+            },
+            project_root=tmp_path,
+            check_paths=False,
+        )
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        _write_prior_artifact(run_dir, 3, "queries.json", json.dumps({"queries": ["structured prior"], "year_min": 2020}))
+        stage_dir = run_dir / "stage-04"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        result = rc_executor._execute_literature_collect(
+            stage_dir, run_dir, config, adapters, llm=None
+        )
+
+        assert result.status == StageStatus.DONE
+        candidates = [json.loads(line) for line in (stage_dir / "candidates.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert any(row.get("source") == "local_note" for row in candidates)
+        assert (stage_dir / "baseline_digest.md").exists()
+        assert (stage_dir / "local_seed_manifest.json").exists()
+
+    def test_literature_collect_prioritizes_zotero_and_obsidian_before_local_seed(
+        self, tmp_path: Path, adapters: AdapterBundle, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import researchclaw.literature.search as lit_search
+        import researchclaw.data as rc_data
+
+        monkeypatch.setattr(lit_search, "search_papers_multi_query", lambda *args, **kwargs: [])
+        monkeypatch.setattr(rc_data, "load_seminal_papers", lambda topic: [])
+
+        zotero_path = tmp_path / "zotero.json"
+        zotero_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "key": "ABCD1234",
+                        "title": "Curated Zotero Paper",
+                        "abstractNote": "A curated baseline paper from Zotero.",
+                        "date": "2024",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        vault_dir = tmp_path / "vault"
+        vault_dir.mkdir(parents=True)
+        (vault_dir / "obsidian_note.md").write_text(
+            "# Obsidian Note\nThis note captures a paper idea and baseline comparison.",
+            encoding="utf-8",
+        )
+        note_dir = tmp_path / "notes"
+        note_dir.mkdir(parents=True)
+        (note_dir / "seed_note.md").write_text(
+            "# Local Seed\nThis is the lower-priority local note seed.",
+            encoding="utf-8",
+        )
+        kb_root = tmp_path / "kb"
+        for name in ("questions", "literature", "experiments", "findings", "decisions", "reviews"):
+            (kb_root / name).mkdir(parents=True, exist_ok=True)
+        config = RCConfig.from_dict(
+            {
+                "project": {"name": "demo", "mode": "docs-first"},
+                "research": {
+                    "topic": "structured priors for planning",
+                    "domains": ["ml"],
+                    "zotero_library_path": str(zotero_path),
+                    "note_seed_paths": [str(note_dir)],
+                    "max_seed_docs": 6,
+                },
+                "runtime": {"timezone": "UTC"},
+                "notifications": {"channel": "console"},
+                "knowledge_base": {
+                    "backend": "markdown",
+                    "root": str(kb_root),
+                    "obsidian_vault": str(vault_dir),
+                },
+                "openclaw_bridge": {},
+                "llm": {"provider": "acp", "acp": {"agent": "codex"}},
+                "experiment": {"mode": "simulated"},
+                "web_search": {"enabled": False},
+            },
+            project_root=tmp_path,
+            check_paths=False,
+        )
+        run_dir = tmp_path / "run-priority"
+        run_dir.mkdir()
+        _write_prior_artifact(
+            run_dir,
+            3,
+            "queries.json",
+            json.dumps({"queries": ["structured prior"], "year_min": 2020}),
+        )
+        stage_dir = run_dir / "stage-04"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        result = rc_executor._execute_literature_collect(
+            stage_dir, run_dir, config, adapters, llm=None
+        )
+
+        assert result.status == StageStatus.DONE
+        candidates = [
+            json.loads(line)
+            for line in (stage_dir / "candidates.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        ordered_sources = [row.get("source") for row in candidates[:3]]
+        assert ordered_sources == ["zotero_json", "obsidian_note", "local_note"]
+        manifest = json.loads((stage_dir / "local_seed_manifest.json").read_text(encoding="utf-8"))
+        assert manifest["priority_order"] == ["zotero", "obsidian", "local_seed"]
+        assert manifest["source_mix"]["zotero_json"] == 1
+
+    def test_literature_screen_writes_shortlist_digest(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        _write_prior_artifact(
+            run_dir,
+            4,
+            "candidates.jsonl",
+            "\n".join(
+                json.dumps(
+                    {
+                        "title": f"Paper {idx}",
+                        "abstract": "Relevant ml abstract with test topic overlap",
+                        "source": "local_note",
+                    }
+                )
+                for idx in range(20)
+            ),
+        )
+        stage_dir = run_dir / "stage-05"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        result = rc_executor._execute_literature_screen(
+            stage_dir, run_dir, rc_config, adapters, llm=None
+        )
+
+        assert result.status == StageStatus.DONE
+        assert (stage_dir / "literature_shortlist.md").exists()
+        digest = (stage_dir / "literature_shortlist.md").read_text(encoding="utf-8")
+        assert "Literature Shortlist" in digest
+        assert "Paper 0" in digest
+
+    def test_result_analysis_writes_experiment_log(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        runs_dir = run_dir / "stage-12" / "runs"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        (runs_dir / "run-1.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "run-1",
+                    "status": "completed",
+                    "metrics": {"primary_metric": 0.81, "baseline/primary_metric": 0.74},
+                    "stdout": "primary_metric: 0.81\nbaseline/primary_metric: 0.74\n",
+                }
+            ),
+            encoding="utf-8",
+        )
+        stage_dir = run_dir / "stage-14"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        result = rc_executor._execute_result_analysis(
+            stage_dir, run_dir, rc_config, adapters, llm=None
+        )
+
+        assert result.status == StageStatus.DONE
+        assert "experiment_log.md" in result.artifacts
+        log_text = (stage_dir / "experiment_log.md").read_text(encoding="utf-8")
+        assert "Experiment Log" in log_text
+        assert "Best run id" in log_text
+
 
 class TestMultiPerspectiveGenerate:
     def test_generates_all_perspectives(self, tmp_path: Path) -> None:
@@ -2187,6 +2679,25 @@ class TestTitleGuidelines:
             msg["content"] for call in llm.calls for msg in call
         )
         assert "Title" in all_prompts or "TITLE" in all_prompts
+
+    def test_paper_outline_prompt_includes_claims_from_results(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        _write_prior_artifact(run_dir, 2, "problem_anchor.md", "# Problem Anchor\nAnchor text.")
+        _write_prior_artifact(run_dir, 14, "analysis.md", "# Analysis\nResults look solid.")
+        _write_prior_artifact(run_dir, 15, "decision.md", "## Decision\nPROCEED")
+        _write_prior_artifact(run_dir, 15, "claims_from_results.md", "# Claims From Results\n- Supported claim text.")
+        _write_prior_artifact(run_dir, 9, "claims_evidence_matrix.md", "# Claims-Evidence Matrix\n- Matrix row.")
+        stage_dir = run_dir / "stage-16"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        llm = FakeLLMClient("# Outline\n")
+
+        rc_executor._execute_paper_outline(
+            stage_dir, run_dir, rc_config, adapters, llm=llm
+        )
+
+        all_prompts = " ".join(msg["content"] for call in llm.calls for msg in call)
+        assert "Supported claim text." in all_prompts
 
 
 # ── R4-4: Conference-Grade Writing Quality Tests ─────────────────────

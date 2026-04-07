@@ -1529,6 +1529,33 @@ _DEFAULT_STAGES: dict[str, dict[str, Any]] = {
             "Goal context:\n{goal_text}"
         ),
     },
+    "problem_anchor": {
+        "system": (
+            "You are a research lead freezing a precise problem anchor before "
+            "the project expands into literature, experimentation, and writing."
+        ),
+        "user": (
+            "Write a compact markdown problem anchor.\n"
+            "Topic: {topic}\n\n"
+            "Goal context:\n{goal_text}\n\n"
+            "Problem decomposition:\n{problem_tree}\n\n"
+            "Baseline briefing:\n{baseline_briefing}\n\n"
+            "Required sections:\n"
+            "- Core Question\n"
+            "- Dominant Contribution\n"
+            "- Baseline Gap\n"
+            "- Proof Obligations\n"
+            "- Experimental Obligations\n"
+            "- Non-Goals\n\n"
+            "Hard rules:\n"
+            "- Freeze exactly one main research question.\n"
+            "- Limit the story to one dominant contribution and at most two "
+            "supporting innovations.\n"
+            "- Reject engineering polish, tooling, prompt hacks, or scale-only gains "
+            "as core contributions.\n"
+            "- Make falsification criteria explicit."
+        ),
+    },
     # ── Phase B: Literature Discovery ────────────────────────────────────
     "search_strategy": {
         "system": (
@@ -2233,8 +2260,37 @@ _DEFAULT_STAGES: dict[str, dict[str, Any]] = {
             "Key data points supporting the decision.\n\n"
             "## Next Actions\n"
             "Concrete steps for the chosen path.\n\n"
-            "Analysis:\n{analysis}"
+            "Analysis:\n{analysis}\n\n"
+            "Claims from results:\n{claims_from_results}"
         ),
+    },
+    "result_to_claim": {
+        "system": (
+            "You are a strict evidence gatekeeper deciding what the experiment "
+            "results actually justify claiming in the paper."
+        ),
+        "user": (
+            "Convert results into calibrated claims.\n"
+            "Topic: {topic}\n\n"
+            "Problem anchor:\n{problem_anchor}\n\n"
+            "Hypotheses:\n{hypotheses}\n\n"
+            "Claims-evidence matrix:\n{claims_evidence_matrix}\n\n"
+            "Experiment summary:\n{experiment_summary}\n\n"
+            "Analysis:\n{analysis}\n\n"
+            "Baseline briefing:\n{baseline_briefing}\n\n"
+            "Output markdown with exactly these sections:\n"
+            "## Supported Claims\n"
+            "## Partially Supported Claims\n"
+            "## Unsupported or Rejected Claims\n"
+            "## Missing Evidence\n"
+            "## Paper Positioning Guidance\n\n"
+            "Hard rules:\n"
+            "- Only mark a claim as supported if the current evidence directly supports it.\n"
+            "- Downgrade broad novelty or SOTA language when the evidence is partial.\n"
+            "- Call out fairness risks in baseline comparison.\n"
+            "- Prefer deleting a claim over overstating it."
+        ),
+        "max_tokens": 6144,
     },
     # ── Phase G: Paper Writing ───────────────────────────────────────────
     "paper_outline": {
@@ -2382,9 +2438,20 @@ _DEFAULT_STAGES: dict[str, dict[str, Any]] = {
         "max_tokens": 16384,
     },
     "peer_review": {
-        "system": "You are a balanced conference reviewer.",
+        "system": "You are the editor-in-chief of a top venue. Review rigorously, fairly, and without inflated praise.",
         "user": (
+            "Target venue: {target_venue}\n"
+            "Venue requirements:\n{venue_profile}\n\n"
+            "Venue rubric:\n{venue_rubric}\n\n"
             "Simulate peer review from at least 3 reviewer perspectives.\n"
+            "Start with a `## Scorecard` section using 1-10 scores for:\n"
+            "- novelty\n"
+            "- technical_soundness\n"
+            "- empirical_adequacy\n"
+            "- writing_clarity\n"
+            "- claim_calibration\n"
+            "- overall_score\n\n"
+            "Then provide a `## Top Findings` section listing the most important must-fix issues.\n\n"
             "Output markdown with Reviewer A (methodology expert), "
             "Reviewer B (domain expert), and Reviewer C (statistics/rigor expert), "
             "each including strengths, weaknesses, and actionable revisions.\n\n"
@@ -2407,6 +2474,9 @@ _DEFAULT_STAGES: dict[str, dict[str, Any]] = {
             "7. FIGURES: Does the paper include at least 2 figures? Zero figures = desk reject.\n"
             "8. CITATION DISTRIBUTION: Are citations only in Intro/Related Work? "
             "Method, Experiments, and Discussion MUST also cite relevant papers.\n\n"
+            "9. EDITORIAL ACTION: In your top findings, state whether the paper needs "
+            "writing-only revision, supplementary experiments, or innovation rework.\n\n"
+            "Claims from results:\n{claims_from_results}\n\n"
             "Paper draft:\n{draft}\n\n"
             "Experiment evidence for verification:\n{experiment_evidence}"
         ),
@@ -2439,9 +2509,18 @@ _DEFAULT_STAGES: dict[str, dict[str, Any]] = {
             "{narrative_writing_rules}\n"
             "{anti_hedging_rules}\n"
             "{anti_repetition_rules}\n"
+            "{review_loop_context}"
+            "Target venue: {target_venue}\n"
+            "Venue requirements:\n{venue_profile}\n\n"
+            "Venue rubric:\n{venue_rubric}\n\n"
             "Revise the paper draft to address all review comments.\n"
             "Return revised markdown only.\n\n"
             "CRITICAL REVISION RULES:\n"
+            "- Judge reviewer comments before obeying them. If a comment is unreasonable, "
+            "do not follow it blindly; narrow or rebut it through evidence-matched prose.\n"
+            "- If reviews identify missing experiments, missing baseline fairness, or weak ablations, "
+            "rewrite the paper so those gaps are explicit and ready for a supplement-experiment loop.\n"
+            "- If reviews identify weak novelty, stop selling the old contribution and rewrite the story conservatively.\n"
             "- Transform any remaining bullet-point lists in the body into flowing "
             "prose paragraphs. The only allowed lists are in the Introduction's contribution "
             "paragraph and the Limitations section.\n"
@@ -2478,12 +2557,15 @@ _DEFAULT_STAGES: dict[str, dict[str, Any]] = {
     },
     # ── Phase H: Finalization ────────────────────────────────────────────
     "quality_gate": {
-        "system": "You are a final quality gate evaluator.",
+        "system": "You are a final quality gate evaluator acting at editor level.",
         "user": (
             "Evaluate revised paper quality and return JSON.\n"
             "Schema: {score_1_to_10:number, verdict:string, strengths:[...], "
             "weaknesses:[...], required_actions:[...]}.\n"
             "Threshold: {quality_threshold}\n"
+            "Target venue: {target_venue}\n"
+            "Venue requirements:\n{venue_profile}\n\n"
+            "Venue rubric:\n{venue_rubric}\n\n"
             "Paper:\n{revised}"
         ),
         "json_mode": True,

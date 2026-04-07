@@ -13,8 +13,8 @@ from __future__ import annotations
 
 # SciencePlots style list — CodeGen Agent inserts this into generated scripts.
 # Fallback: seaborn-v0_8-whitegrid if SciencePlots is not installed.
-MATPLOTLIB_STYLES = ["science", "ieee"]
-MATPLOTLIB_STYLES_FALLBACK = ["seaborn-v0_8-whitegrid"]
+MATPLOTLIB_STYLES = ["science", "nature"]
+MATPLOTLIB_STYLES_FALLBACK = ["seaborn-v0_8-white", "default"]
 
 # Output resolution (DPI) — 300+ for publication, 150 for draft
 DPI_PUBLICATION = 300
@@ -65,17 +65,17 @@ FIGURE_WIDTH = {
 DEFAULT_FIGURE_HEIGHT = 3.0  # reasonable default height
 
 # ---------------------------------------------------------------------------
-# Colorblind-safe palette (Paul Tol's "bright" scheme)
+# Restrained scientific palette for editorial-style figures
 # ---------------------------------------------------------------------------
 
 COLORS_BRIGHT = [
-    "#4477AA",  # blue
-    "#EE6677",  # red
-    "#228833",  # green
-    "#CCBB44",  # yellow
-    "#66CCEE",  # cyan
-    "#AA3377",  # purple
-    "#BBBBBB",  # grey
+    "#1F4E79",  # deep blue
+    "#C44E52",  # muted red
+    "#4C9F70",  # botanical green
+    "#7B6FD0",  # restrained violet
+    "#DD8452",  # warm orange
+    "#55A6B1",  # teal
+    "#8C8C8C",  # neutral grey
 ]
 
 # Extended palette for > 7 categories
@@ -155,6 +155,13 @@ plt.rcParams.update({{
     "xtick.labelsize": {font_tick},
     "ytick.labelsize": {font_tick},
     "legend.fontsize": {font_legend},
+    "axes.facecolor": "white",
+    "figure.facecolor": "white",
+    "axes.edgecolor": "#222222",
+    "axes.linewidth": 0.8,
+    "grid.color": "#D9D9D9",
+    "grid.linestyle": "-",
+    "grid.linewidth": 0.5,
     "figure.dpi": {dpi},
     "savefig.dpi": {dpi},
     "savefig.bbox": "tight",

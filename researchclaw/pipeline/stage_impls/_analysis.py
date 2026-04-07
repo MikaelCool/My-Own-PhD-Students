@@ -19,16 +19,161 @@ from researchclaw.pipeline._helpers import (
     _collect_experiment_results,
     _collect_json_context,
     _get_evolution_overlay,
+    _load_baseline_briefing,
     _multi_perspective_generate,
     _read_prior_artifact,
     _safe_json_loads,
     _synthesize_perspectives,
     _utcnow_iso,
 )
+from researchclaw.pipeline.research_governor import (
+    build_phase_charter,
+    build_stage_skill_overlay,
+    write_phase_handoff,
+)
 from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
 
 logger = logging.getLogger(__name__)
+
+
+def _build_experiment_log(
+    exp_data: dict[str, Any],
+    summary_payload: dict[str, Any],
+    metric_key: str,
+) -> str:
+    lines = [
+        "# Experiment Log",
+        "",
+        f"- Primary metric: {metric_key}",
+        f"- Total runs captured: {len(exp_data.get('runs', []))}",
+    ]
+    best_run = exp_data.get("best_run") or {}
+    if isinstance(best_run, dict) and best_run:
+        lines.append(f"- Best run id: {best_run.get('run_id', 'unknown')}")
+        metrics = best_run.get("metrics") or {}
+        if isinstance(metrics, dict):
+            for mk, mv in list(metrics.items())[:8]:
+                lines.append(f"- Best run metric {mk}: {mv}")
+    condition_summaries = summary_payload.get("condition_summaries", {})
+    if isinstance(condition_summaries, dict) and condition_summaries:
+        lines.extend(["", "## Condition Summary"])
+        for cname, cdata in list(condition_summaries.items())[:8]:
+            lines.append(f"### {cname}")
+            if isinstance(cdata, dict):
+                metrics = cdata.get("metrics") or {}
+                for mk, mv in list(metrics.items())[:5]:
+                    lines.append(f"- {mk}: {mv}")
+    paired = summary_payload.get("paired_comparisons", [])
+    if isinstance(paired, list) and paired:
+        lines.extend(["", "## Paired Comparisons"])
+        for item in paired[:6]:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- {item.get('method', '?')} vs {item.get('baseline', '?')}: "
+                f"mean_diff={item.get('mean_diff', '?')}, p={item.get('p_value', '?')}"
+            )
+    warnings = summary_payload.get("ablation_warnings", [])
+    if isinstance(warnings, list) and warnings:
+        lines.extend(["", "## Warnings"])
+        lines.extend(f"- {warning}" for warning in warnings[:8])
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _fallback_result_to_claim(
+    topic: str,
+    hypotheses: str,
+    claims_evidence_matrix: str,
+    analysis: str,
+) -> tuple[str, dict[str, Any]]:
+    claim_lines: list[str] = []
+    for line in hypotheses.splitlines():
+        stripped = line.strip().lstrip("#").strip()
+        if stripped and len(stripped) > 24:
+            claim_lines.append(stripped.rstrip("."))
+    claim_lines = claim_lines[:3]
+
+    supported = claim_lines[:1] if re.search(r"\b(outperform|improv|gain)\b", analysis, re.IGNORECASE) else []
+    partial = claim_lines[1:] if supported else claim_lines[:1]
+    unsupported = claim_lines[1:] if not supported else []
+
+    lines = [
+        "# Claims From Results",
+        "",
+        "## Supported Claims",
+    ]
+    if supported:
+        lines.extend(f"- {claim}" for claim in supported)
+    else:
+        lines.append("- None strong enough for an unconditional claim yet.")
+    lines.extend(["", "## Partially Supported Claims"])
+    if partial:
+        lines.extend(
+            f"- {claim} only with narrowed scope, explicit caveats, and evidence-matched wording."
+            for claim in partial
+        )
+    else:
+        lines.append("- None.")
+    lines.extend(["", "## Unsupported or Rejected Claims"])
+    if unsupported:
+        lines.extend(f"- {claim}" for claim in unsupported)
+    else:
+        lines.append("- None explicitly rejected.")
+    lines.extend(
+        [
+            "",
+            "## Missing Evidence",
+            "- Fair baseline reproduction on the original setting.",
+            "- Claim-aligned ablation, robustness, or failure-case evidence still missing.",
+            "",
+            "## Paper Positioning Guidance",
+            f"- Frame the paper around calibrated progress on {topic}, not blanket superiority.",
+            "- Remove or weaken any SOTA or broad-theory wording that is not directly supported by current evidence.",
+        ]
+    )
+    if claims_evidence_matrix.strip():
+        lines.extend(["", "## Source Notes", claims_evidence_matrix[:1200]])
+
+    payload = {
+        "generated": _utcnow_iso(),
+        "supported_claims": supported,
+        "partial_claims": partial,
+        "unsupported_claims": unsupported,
+        "missing_evidence": [
+            "baseline reproduction",
+            "claim-aligned ablation or robustness evidence",
+        ],
+    }
+    return "\n".join(lines) + "\n", payload
+
+
+def _parse_claim_sections(text: str) -> dict[str, Any]:
+    sections: dict[str, list[str]] = {
+        "supported_claims": [],
+        "partial_claims": [],
+        "unsupported_claims": [],
+        "missing_evidence": [],
+    }
+    current: str | None = None
+    heading_map = {
+        "supported claims": "supported_claims",
+        "partially supported claims": "partial_claims",
+        "unsupported or rejected claims": "unsupported_claims",
+        "missing evidence": "missing_evidence",
+    }
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("## "):
+            current = heading_map.get(line[3:].strip().lower())
+            continue
+        if current and line.startswith("- "):
+            sections[current].append(line[2:].strip())
+    sections["generated"] = _utcnow_iso()
+    return sections
 
 
 def _execute_result_analysis(
@@ -530,6 +675,14 @@ def _execute_result_analysis(
     (stage_dir / "experiment_summary.json").write_text(
         json.dumps(summary_payload, indent=2, default=str), encoding="utf-8"
     )
+    (stage_dir / "experiment_log.md").write_text(
+        _build_experiment_log(
+            exp_data,
+            summary_payload,
+            config.experiment.metric_key,
+        ),
+        encoding="utf-8",
+    )
     if exp_data["latex_table"]:
         (stage_dir / "results_table.tex").write_text(
             exp_data["latex_table"], encoding="utf-8"
@@ -625,7 +778,7 @@ Generated: {_utcnow_iso()}
 """
     (stage_dir / "analysis.md").write_text(analysis, encoding="utf-8")
 
-    artifacts = ["analysis.md", "experiment_summary.json"]
+    artifacts = ["analysis.md", "experiment_summary.json", "experiment_log.md"]
     if (stage_dir / "results_table.tex").exists():
         artifacts.append("results_table.tex")
 
@@ -796,6 +949,59 @@ def _execute_research_decision(
     prompts: PromptManager | None = None,
 ) -> StageResult:
     analysis = _read_prior_artifact(run_dir, "analysis.md") or ""
+    hypotheses = _read_prior_artifact(run_dir, "hypotheses.md") or ""
+    problem_anchor = _read_prior_artifact(run_dir, "problem_anchor.md") or ""
+    claims_evidence_matrix = _read_prior_artifact(run_dir, "claims_evidence_matrix.md") or ""
+    experiment_summary = _read_prior_artifact(run_dir, "experiment_summary.json") or ""
+    _pm = prompts or PromptManager()
+
+    if llm is not None:
+        _claims_overlay = (
+            _get_evolution_overlay(run_dir, "research_decision")
+            + "\n"
+            + build_phase_charter("research_decision")
+            + "\n"
+            + build_stage_skill_overlay(
+                config,
+                stage_name="research_decision",
+                context="\n\n".join((analysis[:2500], experiment_summary[:2500], hypotheses[:1200])),
+            )
+        )
+        _claim_prompt = _pm.for_stage(
+            "result_to_claim",
+            evolution_overlay=_claims_overlay,
+            topic=config.research.topic,
+            problem_anchor=problem_anchor,
+            hypotheses=hypotheses,
+            claims_evidence_matrix=claims_evidence_matrix,
+            experiment_summary=experiment_summary[:6000],
+            analysis=analysis,
+            baseline_briefing=_load_baseline_briefing(config),
+        )
+        _claim_resp = _chat_with_prompt(
+            llm,
+            _claim_prompt.system,
+            _claim_prompt.user,
+            max_tokens=_claim_prompt.max_tokens,
+        )
+        claims_from_results = _claim_resp.content
+        claims_payload = _parse_claim_sections(claims_from_results)
+    else:
+        claims_from_results, claims_payload = _fallback_result_to_claim(
+            config.research.topic,
+            hypotheses,
+            claims_evidence_matrix,
+            analysis,
+        )
+
+    (stage_dir / "claims_from_results.md").write_text(
+        claims_from_results,
+        encoding="utf-8",
+    )
+    (stage_dir / "claims_from_results.json").write_text(
+        json.dumps(claims_payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     # P6: Detect degenerate REFINE cycles — inject warning if metrics stagnate
     _degenerate_hint = ""
@@ -881,9 +1087,23 @@ def _execute_research_decision(
             pass
 
     if llm is not None:
-        _pm = prompts or PromptManager()
-        _overlay = _get_evolution_overlay(run_dir, "research_decision")
-        sp = _pm.for_stage("research_decision", evolution_overlay=_overlay, analysis=analysis)
+        _overlay = (
+            _get_evolution_overlay(run_dir, "research_decision")
+            + "\n"
+            + build_phase_charter("research_decision")
+            + "\n"
+            + build_stage_skill_overlay(
+                config,
+                stage_name="research_decision",
+                context="\n\n".join((claims_from_results[:2000], analysis[:2000])),
+            )
+        )
+        sp = _pm.for_stage(
+            "research_decision",
+            evolution_overlay=_overlay,
+            analysis=analysis,
+            claims_from_results=claims_from_results,
+        )
         _user = sp.user + _degenerate_hint + _diagnosis_hint + _ablation_refine_hint
         resp = _chat_with_prompt(llm, sp.system, _user)
         decision_md = resp.content
@@ -929,11 +1149,26 @@ Generated: {_utcnow_iso()}
         json.dumps(decision_payload, indent=2), encoding="utf-8"
     )
     logger.info("Research decision: %s", decision)
+    write_phase_handoff(
+        stage_dir / "phase2_handoff.md",
+        "Phase 2 Handoff",
+        {
+            "Innovation Forge Charter": build_phase_charter("research_decision"),
+            "Claims From Results": claims_from_results[:2500],
+            "Decision": decision_md[:2000],
+        },
+    )
 
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
         status=StageStatus.DONE,
-        artifacts=("decision.md", "decision_structured.json"),
+        artifacts=(
+            "decision.md",
+            "decision_structured.json",
+            "claims_from_results.md",
+            "claims_from_results.json",
+            "phase2_handoff.md",
+        ),
         evidence_refs=("stage-15/decision.md",),
         decision=decision,
     )
