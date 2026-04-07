@@ -1,4 +1,4 @@
-# AutoResearchClaw 使用 README
+# My Own PhD Students 使用 README
 
 详细版教程见：
 
