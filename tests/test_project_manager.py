@@ -342,6 +342,72 @@ class TestProjectManager:
         assert studio["timeline"]
         assert any(event["kind"] == "stage" for event in studio["timeline"])
 
+    def test_latest_recoverable_run_prefers_last_run_with_checkpoint(
+        self, manager: ProjectManager, config_yaml: Path
+    ) -> None:
+        project = manager.create("resume_proj", str(config_yaml), topic="resume")
+        old_run = manager.start_run("resume_proj", run_id="rc-20260101-000000-old111")
+        old_root = Path(project.run_dir) / old_run
+        old_root.mkdir(parents=True, exist_ok=True)
+        (old_root / "checkpoint.json").write_text(
+            json.dumps(
+                {
+                    "stage": 5,
+                    "stage_name": "LITERATURE_SCREEN",
+                    "last_completed_stage": 5,
+                    "last_completed_name": "LITERATURE_SCREEN",
+                }
+            ),
+            encoding="utf-8",
+        )
+        newer_done = manager.start_run("resume_proj", run_id="rc-20260102-000000-done22")
+        done_root = Path(project.run_dir) / newer_done
+        done_root.mkdir(parents=True, exist_ok=True)
+        (done_root / "checkpoint.json").write_text(
+            json.dumps(
+                {
+                    "stage": 23,
+                    "stage_name": "EXPORT_PUBLISH",
+                    "last_completed_stage": 23,
+                    "last_completed_name": "EXPORT_PUBLISH",
+                }
+            ),
+            encoding="utf-8",
+        )
+        manager.finish_run("resume_proj", "failed")
+
+        recoverable = manager.latest_recoverable_run("resume_proj")
+
+        assert recoverable is not None
+        assert recoverable["run_id"] == old_run
+        assert recoverable["from_stage"] == "KNOWLEDGE_EXTRACT"
+
+    def test_materialize_studio_marks_continue_available(
+        self, manager: ProjectManager, config_yaml: Path
+    ) -> None:
+        project = manager.create("continue_proj", str(config_yaml), topic="continue")
+        run_id = manager.start_run("continue_proj", run_id="rc-20260103-000000-cont11")
+        run_root = Path(project.run_dir) / run_id
+        run_root.mkdir(parents=True, exist_ok=True)
+        (run_root / "checkpoint.json").write_text(
+            json.dumps(
+                {
+                    "stage": 10,
+                    "stage_name": "CODE_GENERATION",
+                    "last_completed_stage": 10,
+                    "last_completed_name": "CODE_GENERATION",
+                }
+            ),
+            encoding="utf-8",
+        )
+        manager.finish_run("continue_proj", "stopped", summary="Stopped for later resume.")
+
+        studio = manager.materialize_studio("continue_proj")
+
+        assert studio["controls"]["can_continue"] is True
+        assert studio["controls"]["continue_run_id"] == run_id
+        assert studio["controls"]["continue_from_stage"] == "RESOURCE_PLANNING"
+
 
 # ══════════════════════════════════════════════════════════════════
 # ProjectScheduler tests

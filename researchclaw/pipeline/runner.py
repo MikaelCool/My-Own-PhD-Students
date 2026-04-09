@@ -224,6 +224,30 @@ def _collect_content_metrics(run_dir: Path | None) -> dict[str, object]:
 logger = logging.getLogger(__name__)
 
 
+def _ensure_active_run_log_handler(run_dir: Path) -> None:
+    """Route pipeline logs to ``run_dir/pipeline.log`` for the workspace UI."""
+    log_path = str((run_dir / "pipeline.log").resolve())
+    root = logging.getLogger()
+
+    for handler in list(root.handlers):
+        existing = getattr(handler, "_researchclaw_run_log_path", None)
+        if existing and existing != log_path:
+            root.removeHandler(handler)
+            handler.close()
+        elif existing == log_path:
+            return
+
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    setattr(handler, "_researchclaw_run_log_path", log_path)
+    root.addHandler(handler)
+    if root.level > logging.INFO:
+        root.setLevel(logging.INFO)
+
+
 def _run_experiment_diagnosis(run_dir: Path, config: RCConfig, run_id: str) -> None:
     """Run experiment diagnosis after Stage 14 and save reports.
 
@@ -453,6 +477,7 @@ def execute_pipeline(
 ) -> list[StageResult]:
     """Execute pipeline stages sequentially from `from_stage` and write summary."""
 
+    _ensure_active_run_log_handler(run_dir)
     results: list[StageResult] = []
     started = False
     total_stages = len(STAGE_SEQUENCE)
@@ -466,6 +491,7 @@ def execute_pipeline(
 
         stage_num = int(stage)
         prefix = f"[{run_id}] Stage {stage_num:02d}/{total_stages}"
+        logger.info("%s %s - running", prefix, stage.name)
         print(f"{prefix} {stage.name} — running...")
 
         # BUG-218: Ensure the best stage-14 experiment data is promoted
@@ -503,6 +529,15 @@ def execute_pipeline(
         elif result.status == StageStatus.BLOCKED_APPROVAL:
             print(f"{prefix} {stage.name} — blocked (awaiting approval)")
         results.append(result)
+        logger.info(
+            "[%s] %s status=%s decision=%s artifacts=%s error=%s",
+            run_id,
+            stage.name,
+            result.status.value,
+            result.decision,
+            list(result.artifacts),
+            result.error or "",
+        )
 
         if kb_root is not None and result.status == StageStatus.DONE:
             try:

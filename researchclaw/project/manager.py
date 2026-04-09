@@ -145,6 +145,36 @@ class ProjectManager:
         runs = self.list_runs(name)
         return runs[0] if runs else None
 
+    def latest_recoverable_run(self, name: str) -> dict[str, Any] | None:
+        """Return the most recent run that has a resumable checkpoint."""
+        project = self.get(name)
+        run_root = Path(project.run_dir)
+        if not run_root.exists():
+            return None
+
+        from researchclaw.pipeline.runner import read_checkpoint
+
+        candidates: list[Path] = []
+        if project.last_run_id:
+            candidates.append(run_root / project.last_run_id)
+        candidates.extend(sorted(run_root.glob("rc-*"), reverse=True))
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            if not candidate.is_dir() or candidate.name in seen:
+                continue
+            seen.add(candidate.name)
+            next_stage = read_checkpoint(candidate)
+            if next_stage is None:
+                continue
+            return {
+                "run_id": candidate.name,
+                "path": str(candidate),
+                "from_stage": next_stage.name,
+                "from_stage_num": int(next_stage),
+            }
+        return None
+
     # CRUD ------------------------------------------------------------------------
 
     def create(
@@ -500,6 +530,7 @@ class ProjectManager:
     def materialize_studio(self, name: str) -> dict[str, Any]:
         project = self.get(name)
         latest_run = self.latest_run(name)
+        recoverable_run = self.latest_recoverable_run(name)
         startup_contract = self.read_startup_contract(name)
         logs: list[str] = []
         if latest_run:
@@ -516,7 +547,10 @@ class ProjectManager:
             "controls": {
                 "can_start": project.status != "running",
                 "can_stop": project.status == "running",
+                "can_continue": project.status != "running" and recoverable_run is not None,
                 "launch_mode": project.launch_mode,
+                "continue_run_id": recoverable_run["run_id"] if recoverable_run else None,
+                "continue_from_stage": recoverable_run["from_stage"] if recoverable_run else None,
             },
         }
 

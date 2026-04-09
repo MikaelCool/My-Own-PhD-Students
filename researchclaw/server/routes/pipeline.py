@@ -165,6 +165,35 @@ def _resolve_from_stage(
     return Stage.TOPIC_INIT
 
 
+def _resolve_recoverable_run(
+    config: RCConfig,
+    req: PipelineStartRequest,
+) -> tuple[str, Path, ProjectManager | None] | None:
+    """Return the latest resumable run directory for continue/resume requests."""
+    wants_resume = req.resume or (req.launch_mode or "").lower() == "continue_existing_state"
+    if not wants_resume:
+        return None
+
+    if req.project_id:
+        manager = _project_manager(config)
+        recoverable = manager.latest_recoverable_run(req.project_id)
+        if recoverable:
+            return recoverable["run_id"], Path(recoverable["path"]), manager
+        return None
+
+    from researchclaw.pipeline.runner import read_checkpoint
+
+    artifacts = Path("artifacts")
+    if not artifacts.exists():
+        return None
+    for candidate in sorted(artifacts.glob("rc-*"), reverse=True):
+        if not candidate.is_dir():
+            continue
+        if read_checkpoint(candidate) is not None:
+            return candidate.name, candidate, None
+    return None
+
+
 def _load_metrics(run_dir: Path) -> dict[str, Any]:
     collector = DashboardCollector(artifacts_dir=run_dir.parent)
     for snap in collector.collect_all():
@@ -187,16 +216,42 @@ async def start_pipeline(req: PipelineStartRequest) -> PipelineStartResponse:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    import hashlib
-    from datetime import datetime, timezone
-
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    topic_hash = hashlib.sha256(config.research.topic.encode()).hexdigest()[:6]
-    run_id = f"rc-{ts}-{topic_hash}"
     try:
-        run_dir, manager = _resolve_run_dir(config, req, run_id)
+        recovered = _resolve_recoverable_run(config, req)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    wants_resume = req.resume or (req.launch_mode or "").lower() == "continue_existing_state"
+    if recovered is not None:
+        run_id, run_dir, manager = recovered
+        if req.project_id and manager is not None:
+            project = manager.get(req.project_id)
+            manager.start_run(req.project_id, run_id)
+            _write_run_startup_contract(
+                run_dir,
+                {
+                    **project.startup_contract,
+                    **(req.startup_contract or {}),
+                    "goal": (req.startup_contract or {}).get("goal", req.topic or project.topic),
+                    "launch_mode": project.launch_mode,
+                },
+            )
+    elif wants_resume:
+        raise HTTPException(
+            status_code=400,
+            detail="No recoverable run found. Start a new run first or wait for a checkpoint.",
+        )
+    else:
+        import hashlib
+        from datetime import datetime, timezone
+
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        topic_hash = hashlib.sha256(config.research.topic.encode()).hexdigest()[:6]
+        run_id = f"rc-{ts}-{topic_hash}"
+        try:
+            run_dir, manager = _resolve_run_dir(config, req, run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     from_stage = _resolve_from_stage(req, run_dir)
 
     _active_run = {

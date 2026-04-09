@@ -89,6 +89,21 @@ _IMPORT_TO_PIP = {
 }
 
 
+def _host_user_args() -> list[str]:
+    """Return ``docker run`` args to run as the host user when available.
+
+    On POSIX we pass ``--user UID:GID`` so files written into the bind mount
+    remain editable by the host user. Windows does not expose ``os.getuid`` /
+    ``os.getgid``, so we skip the flag there instead of crashing before Docker
+    is even invoked.
+    """
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if callable(getuid) and callable(getgid):
+        return ["--user", f"{getuid()}:{getgid()}"]
+    return []
+
+
 class DockerSandbox:
     """Execute experiment code inside a Docker container.
 
@@ -373,7 +388,7 @@ class DockerSandbox:
         if cfg.network_policy == "none":
             # Fully isolated — no network at any point
             cmd.extend(["--network", "none"])
-            cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
+            cmd.extend(_host_user_args())
         elif cfg.network_policy in ("setup_only", "pip_only"):
             # Network during Phase 0+1, disabled via iptables before Phase 2.
             # Run as host user so experiment can write results.json to volume.
@@ -381,11 +396,11 @@ class DockerSandbox:
             # the user lacks root — network remains available but the code
             # has already been validated by the pipeline security check.
             cmd.extend(["-e", "RC_SETUP_ONLY_NETWORK=1"])
-            cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
+            cmd.extend(_host_user_args())
             cmd.extend(["--cap-add=NET_ADMIN"])
         elif cfg.network_policy == "full":
             # Full network throughout — for development/debugging
-            cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
+            cmd.extend(_host_user_args())
 
         # Mount pre-cached datasets
         # Priority: /opt/datasets (system) > ~/.cache/datasets (user)

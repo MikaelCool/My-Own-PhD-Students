@@ -677,3 +677,192 @@ class TestFastAPIApp:
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             resp = await ac.post("/api/pipeline/stop")
             assert resp.status_code == 404
+
+    @pytest.mark.anyio
+    async def test_settings_endpoint_round_trips_notification_webhook_fields(
+        self, tmp_path: Path, _skip_if_no_fastapi: None
+    ) -> None:
+        from httpx import ASGITransport, AsyncClient
+
+        from researchclaw.config import RCConfig
+        from researchclaw.server.app import create_app
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("project:\n  name: test\nresearch:\n  topic: test\n", encoding="utf-8")
+        data = {
+            "project": {"name": "test"},
+            "research": {"topic": "test"},
+            "runtime": {"timezone": "UTC"},
+            "notifications": {
+                "channel": "lark",
+                "target": "https://example.invalid/hook",
+                "secret": "top-secret",
+                "on_stage_complete": True,
+                "on_stage_fail": True,
+            },
+            "knowledge_base": {"root": "knowledge"},
+            "llm": {
+                "provider": "openai-compatible",
+                "base_url": "http://localhost",
+                "api_key_env": "TEST",
+            },
+        }
+        app = create_app(
+            RCConfig.from_dict(data, check_paths=False),
+            config_path=str(config_path),
+        )
+
+        transport = ASGITransport(app=app)  # type: ignore[arg-type]
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            get_resp = await ac.get("/api/settings")
+            assert get_resp.status_code == 200
+            get_payload = get_resp.json()
+            assert get_payload["config"]["notifications"]["target"] == "https://example.invalid/hook"
+            assert get_payload["config"]["notifications"]["secret"] == "top-secret"
+
+            post_resp = await ac.post("/api/settings", json={"config": data})
+            assert post_resp.status_code == 200
+            post_payload = post_resp.json()
+            assert post_payload["config"]["notifications"]["target"] == "https://example.invalid/hook"
+            assert post_payload["config"]["notifications"]["secret"] == "top-secret"
+
+        saved_yaml = config_path.read_text(encoding="utf-8")
+        assert "target: https://example.invalid/hook" in saved_yaml
+        assert "secret: top-secret" in saved_yaml
+
+    @pytest.mark.anyio
+    async def test_test_notification_endpoint_uses_draft_webhook_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _skip_if_no_fastapi: None
+    ) -> None:
+        from httpx import ASGITransport, AsyncClient
+
+        from researchclaw.adapters import AdapterBundle
+        from researchclaw.config import RCConfig
+        from researchclaw.server.app import create_app
+        from researchclaw.server.routes import settings as settings_routes
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("project:\n  name: test\nresearch:\n  topic: test\n", encoding="utf-8")
+        base_data = {
+            "project": {"name": "test"},
+            "research": {"topic": "test"},
+            "runtime": {"timezone": "UTC"},
+            "notifications": {"channel": "console"},
+            "knowledge_base": {"root": "knowledge"},
+            "llm": {
+                "provider": "openai-compatible",
+                "base_url": "http://localhost",
+                "api_key_env": "TEST",
+            },
+        }
+        app = create_app(
+            RCConfig.from_dict(base_data, check_paths=False),
+            config_path=str(config_path),
+        )
+
+        bundle = AdapterBundle()
+        captured: dict[str, str] = {}
+
+        def _fake_from_config(cls, config):  # type: ignore[no-untyped-def]
+            captured["channel"] = config.notifications.channel
+            captured["target"] = config.notifications.target
+            captured["secret"] = config.notifications.secret
+            return bundle
+
+        monkeypatch.setattr(
+            settings_routes.AdapterBundle,
+            "from_config",
+            classmethod(_fake_from_config),
+        )
+
+        draft = {
+            **base_data,
+            "notifications": {
+                "channel": "lark",
+                "target": "https://example.invalid/hook",
+                "secret": "top-secret",
+            },
+        }
+
+        transport = ASGITransport(app=app)  # type: ignore[arg-type]
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post("/api/settings/test-notification", json={"config": draft})
+            assert resp.status_code == 200
+            payload = resp.json()
+            assert payload["status"] == "ok"
+            assert payload["channel"] == "lark"
+
+        assert captured == {
+            "channel": "lark",
+            "target": "https://example.invalid/hook",
+            "secret": "top-secret",
+        }
+        assert len(bundle.message.calls) == 1
+        channel, subject, body = bundle.message.calls[0]
+        assert channel == "lark"
+        assert subject == "Feishu notification test"
+        assert "Source: workspace settings" in body
+
+
+class TestPipelineResumeHelpers:
+    def test_resolve_recoverable_run_prefers_existing_project_run(self, tmp_path: Path) -> None:
+        from researchclaw.config import RCConfig
+        from researchclaw.project.manager import ProjectManager
+        from researchclaw.server.routes.pipeline import (
+            PipelineStartRequest,
+            _resolve_recoverable_run,
+        )
+
+        projects_dir = tmp_path / "projects"
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("project:\n  name: test\nresearch:\n  topic: test\n", encoding="utf-8")
+        manager = ProjectManager(projects_dir)
+        project = manager.create("resume_proj", str(config_path), topic="resume topic")
+        run_id = manager.start_run("resume_proj", run_id="rc-20260104-000000-resume")
+        run_root = Path(project.run_dir) / run_id
+        run_root.mkdir(parents=True, exist_ok=True)
+        (run_root / "checkpoint.json").write_text(
+            json.dumps(
+                {
+                    "stage": 8,
+                    "stage_name": "HYPOTHESIS_GEN",
+                    "last_completed_stage": 8,
+                    "last_completed_name": "HYPOTHESIS_GEN",
+                }
+            ),
+            encoding="utf-8",
+        )
+        manager.finish_run("resume_proj", "failed")
+
+        cfg = RCConfig.from_dict(
+            {
+                "project": {"name": "test"},
+                "research": {"topic": "resume topic"},
+                "runtime": {"timezone": "UTC"},
+                "notifications": {"channel": "console"},
+                "knowledge_base": {"root": str(tmp_path / "knowledge")},
+                "llm": {
+                    "provider": "openai-compatible",
+                    "base_url": "http://localhost",
+                    "api_key_env": "TEST",
+                },
+                "multi_project": {
+                    "enabled": True,
+                    "projects_dir": str(projects_dir),
+                },
+            },
+            check_paths=False,
+        )
+        req = PipelineStartRequest(
+            project_id="resume_proj",
+            launch_mode="continue_existing_state",
+            resume=True,
+        )
+
+        recovered = _resolve_recoverable_run(cfg, req)
+
+        assert recovered is not None
+        recovered_run_id, recovered_dir, recovered_manager = recovered
+        assert recovered_run_id == run_id
+        assert recovered_dir == run_root
+        assert recovered_manager is not None

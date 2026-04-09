@@ -20,6 +20,7 @@ const I18N = {
     hero_card_canvas: "从结构图看清阶段 工件 决策和回滚路径",
     hero_card_studio: "像对话一样跟踪研究进展 并结合时间线完成控制和排查",
     settings: "设置",
+    continue_run: "继续",
     run: "运行",
     stop: "停止",
     details: "详情",
@@ -102,7 +103,9 @@ const I18N = {
     feishu_test_failed: "测试通知发送失败",
     project_created: "项目已创建，流水线已启动。",
     pipeline_started: "流水线已启动。",
+    pipeline_continued: "已从最近可恢复的运行继续。",
     pipeline_stopped: "流水线已停止。",
+    no_recoverable_run: "没有找到可继续的运行。",
     select_project_first: "请先选择一个项目。",
     language: "界面语言",
     language_zh: "简体中文",
@@ -177,6 +180,7 @@ const I18N = {
     no_artifacts: "还没有关键工件。",
     no_data: "暂无数据",
     can_start: "可启动",
+    can_continue: "可继续",
     can_stop: "可停止",
     type_project: "项目",
     type_run: "运行",
@@ -205,6 +209,11 @@ const I18N = {
     node_label: "节点名称",
     node_meta: "元数据",
     studio_system_hint: "这里像一个研究控制台，你可以把它当成 ChatGPT 式对话流加运行时间线。",
+    field_notifications_target: "\u98de\u4e66 / \u4f01\u4e1a\u5fae\u4fe1 Webhook",
+    field_notifications_secret: "\u98de\u4e66\u7b7e\u540d Secret",
+    help_notification_channel: "\u586b\u5199 lark / feishu / wecom \u4e4b\u4e00",
+    help_notification_target: "\u98de\u4e66\u6216\u4f01\u4e1a\u5fae\u4fe1\u673a\u5668\u4eba webhook \u5730\u5740",
+    help_notification_secret: "\u4ec5\u98de\u4e66\u7b7e\u540d\u673a\u5668\u4eba\u9700\u8981\uff0c\u5176\u4ed6\u60c5\u51b5\u7559\u7a7a",
   },
   en: {
     brand_subtitle: "Your AI PhD student team",
@@ -225,6 +234,7 @@ const I18N = {
     hero_card_canvas: "Read phases artifacts decisions and rollback paths from the graph view",
     hero_card_studio: "Track progress like a conversation and pair it with a run timeline and controls",
     settings: "Settings",
+    continue_run: "continue",
     run: "Run",
     stop: "Stop",
     details: "Details",
@@ -307,7 +317,9 @@ const I18N = {
     feishu_test_failed: "Failed to send test notification",
     project_created: "Project created and pipeline started.",
     pipeline_started: "Pipeline started.",
+    pipeline_continued: "Resumed from the latest recoverable run.",
     pipeline_stopped: "Pipeline stopped.",
+    no_recoverable_run: "No recoverable run found.",
     select_project_first: "Select a project first.",
     language: "Interface language",
     language_zh: "Simplified Chinese",
@@ -382,6 +394,7 @@ const I18N = {
     no_artifacts: "No key artifacts yet.",
     no_data: "No data",
     can_start: "Can start",
+    can_continue: "Can continue",
     can_stop: "Can stop",
     type_project: "Project",
     type_run: "Run",
@@ -410,6 +423,11 @@ const I18N = {
     node_label: "Node label",
     node_meta: "Metadata",
     studio_system_hint: "Treat this as a ChatGPT-like message stream plus a run timeline.",
+    field_notifications_target: "Feishu / WeCom webhook",
+    field_notifications_secret: "Feishu signing secret",
+    help_notification_channel: "Use one of: lark, feishu, wecom",
+    help_notification_target: "Webhook URL for your Feishu or WeCom bot",
+    help_notification_secret: "Optional. Only needed for signed Feishu bots",
   },
 };
 
@@ -450,6 +468,9 @@ const els = {
   startForm: document.getElementById("start-form"),
   settingsContent: document.getElementById("settings-content"),
   toast: document.getElementById("toast"),
+  continueRun: document.getElementById("continue-run"),
+  startRun: document.getElementById("start-run"),
+  stopRun: document.getElementById("stop-run"),
 };
 
 function t(key) {
@@ -1125,13 +1146,17 @@ function renderStudio() {
             <div class="meta-list">
               ${metaRows([
                 [t("can_start"), boolLabel(controls.can_start)],
+                [t("can_continue"), boolLabel(controls.can_continue)],
                 [t("can_stop"), boolLabel(controls.can_stop)],
                 [t("launch_mode"), launchModeLabel(controls.launch_mode)],
+                [t("summary_run"), controls.continue_run_id || t("not_set")],
+                [t("summary_stage"), controls.continue_from_stage || t("not_set")],
               ])}
             </div>
             <div class="control-actions">
-              <button class="secondary-action" type="button" data-studio-action="start">${escapeHtml(t("run"))}</button>
-              <button class="danger-action" type="button" data-studio-action="stop">${escapeHtml(t("stop"))}</button>
+              <button class="secondary-action" type="button" data-studio-action="continue" ${controls.can_continue ? "" : "disabled"}>${escapeHtml(t("continue_run"))}</button>
+              <button class="secondary-action" type="button" data-studio-action="start" ${controls.can_start ? "" : "disabled"}>${escapeHtml(t("run"))}</button>
+              <button class="danger-action" type="button" data-studio-action="stop" ${controls.can_stop ? "" : "disabled"}>${escapeHtml(t("stop"))}</button>
             </div>
           </div>
           <div class="panel-block">
@@ -1378,6 +1403,8 @@ function renderSettings() {
         `)}
         ${renderSettingsSection(t("notifications"), `
           ${renderInputField({ label: t("field_notifications_channel"), path: "notifications.channel", value: getSetting("notifications.channel", ""), help: t("help_notification_channel") })}
+          ${renderInputField({ label: t("field_notifications_target"), path: "notifications.target", value: getSetting("notifications.target", ""), help: t("help_notification_target") })}
+          ${renderInputField({ label: t("field_notifications_secret"), path: "notifications.secret", value: getSetting("notifications.secret", ""), type: "password", help: t("help_notification_secret") })}
           ${renderBooleanField({ label: t("field_stage_start"), path: "notifications.on_stage_start", value: getSetting("notifications.on_stage_start", false) })}
           ${renderBooleanField({ label: t("field_stage_complete"), path: "notifications.on_stage_complete", value: getSetting("notifications.on_stage_complete", false) })}
           ${renderBooleanField({ label: t("field_stage_fail"), path: "notifications.on_stage_fail", value: getSetting("notifications.on_stage_fail", false) })}
@@ -1460,6 +1487,7 @@ async function loadProjects() {
     state.selectedProject = null;
     els.workspace.classList.add("hidden");
     els.emptyState.classList.remove("hidden");
+    syncPrimaryControls();
     return;
   }
   if (!state.selectedProjectId || !state.projects.some((project) => project.name === state.selectedProjectId)) {
@@ -1539,6 +1567,31 @@ async function startSelectedProject() {
     }),
   });
   toast(t("pipeline_started"));
+  await loadProjectWorkspace(state.selectedProjectId);
+}
+
+async function continueSelectedProject() {
+  if (!state.selectedProjectId || !state.selectedProject) {
+    toast(t("select_project_first"));
+    return;
+  }
+  const controls = state.studio?.controls || {};
+  if (!controls.can_continue) {
+    toast(t("no_recoverable_run"));
+    return;
+  }
+  await api("/api/pipeline/start", {
+    method: "POST",
+    body: JSON.stringify({
+      topic: state.selectedProject.topic,
+      auto_approve: true,
+      project_id: state.selectedProjectId,
+      startup_contract: state.selectedProject.startup_contract || {},
+      launch_mode: "continue_existing_state",
+      resume: true,
+    }),
+  });
+  toast(t("pipeline_continued"));
   await loadProjectWorkspace(state.selectedProjectId);
 }
 
@@ -1634,6 +1687,21 @@ function renderAllWorkspace() {
   renderCanvas();
   renderStudio();
   renderFiles();
+  syncPrimaryControls();
+}
+
+function syncPrimaryControls() {
+  const controls = state.studio?.controls || {};
+  const hasProject = Boolean(state.selectedProjectId && state.selectedProject);
+  if (els.startRun) {
+    els.startRun.disabled = !hasProject || !controls.can_start;
+  }
+  if (els.continueRun) {
+    els.continueRun.disabled = !hasProject || !controls.can_continue;
+  }
+  if (els.stopRun) {
+    els.stopRun.disabled = !hasProject || !controls.can_stop;
+  }
 }
 
 function renderAll() {
@@ -1707,7 +1775,11 @@ function bindDynamicUi() {
     const studioAction = target.closest("[data-studio-action]");
     if (studioAction instanceof HTMLElement) {
       const action = studioAction.dataset.studioAction;
-      const task = action === "start" ? startSelectedProject : stopSelectedProject;
+      const task = action === "continue"
+        ? continueSelectedProject
+        : action === "start"
+          ? startSelectedProject
+          : stopSelectedProject;
       task().catch((error) => {
         toast(error.message);
         console.error(error);
@@ -1751,6 +1823,12 @@ function bindUi() {
   document.getElementById("open-settings").addEventListener("click", async () => {
     await loadSettings();
     openModal("settings-modal");
+  });
+  document.getElementById("continue-run").addEventListener("click", () => {
+    continueSelectedProject().catch((error) => {
+      toast(error.message);
+      console.error(error);
+    });
   });
   document.getElementById("start-run").addEventListener("click", () => {
     startSelectedProject().catch((error) => {
