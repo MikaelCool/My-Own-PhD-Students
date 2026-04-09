@@ -209,6 +209,11 @@ const I18N = {
     node_label: "节点名称",
     node_meta: "元数据",
     studio_system_hint: "这里像一个研究控制台，你可以把它当成 ChatGPT 式对话流加运行时间线。",
+    field_notifications_target: "\u98de\u4e66 / \u4f01\u4e1a\u5fae\u4fe1 Webhook",
+    field_notifications_secret: "\u98de\u4e66\u7b7e\u540d Secret",
+    help_notification_channel: "\u586b\u5199 lark / feishu / wecom \u4e4b\u4e00",
+    help_notification_target: "\u98de\u4e66\u6216\u4f01\u4e1a\u5fae\u4fe1\u673a\u5668\u4eba webhook \u5730\u5740",
+    help_notification_secret: "\u4ec5\u98de\u4e66\u7b7e\u540d\u673a\u5668\u4eba\u9700\u8981\uff0c\u5176\u4ed6\u60c5\u51b5\u7559\u7a7a",
   },
   en: {
     brand_subtitle: "Your AI PhD student team",
@@ -229,7 +234,7 @@ const I18N = {
     hero_card_canvas: "Read phases artifacts decisions and rollback paths from the graph view",
     hero_card_studio: "Track progress like a conversation and pair it with a run timeline and controls",
     settings: "Settings",
-    continue_run: "Continue",
+    continue_run: "continue",
     run: "Run",
     stop: "Stop",
     details: "Details",
@@ -418,6 +423,11 @@ const I18N = {
     node_label: "Node label",
     node_meta: "Metadata",
     studio_system_hint: "Treat this as a ChatGPT-like message stream plus a run timeline.",
+    field_notifications_target: "Feishu / WeCom webhook",
+    field_notifications_secret: "Feishu signing secret",
+    help_notification_channel: "Use one of: lark, feishu, wecom",
+    help_notification_target: "Webhook URL for your Feishu or WeCom bot",
+    help_notification_secret: "Optional. Only needed for signed Feishu bots",
   },
 };
 
@@ -1393,6 +1403,8 @@ function renderSettings() {
         `)}
         ${renderSettingsSection(t("notifications"), `
           ${renderInputField({ label: t("field_notifications_channel"), path: "notifications.channel", value: getSetting("notifications.channel", ""), help: t("help_notification_channel") })}
+          ${renderInputField({ label: t("field_notifications_target"), path: "notifications.target", value: getSetting("notifications.target", ""), help: t("help_notification_target") })}
+          ${renderInputField({ label: t("field_notifications_secret"), path: "notifications.secret", value: getSetting("notifications.secret", ""), type: "password", help: t("help_notification_secret") })}
           ${renderBooleanField({ label: t("field_stage_start"), path: "notifications.on_stage_start", value: getSetting("notifications.on_stage_start", false) })}
           ${renderBooleanField({ label: t("field_stage_complete"), path: "notifications.on_stage_complete", value: getSetting("notifications.on_stage_complete", false) })}
           ${renderBooleanField({ label: t("field_stage_fail"), path: "notifications.on_stage_fail", value: getSetting("notifications.on_stage_fail", false) })}
