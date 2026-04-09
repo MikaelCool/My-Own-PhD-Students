@@ -677,3 +677,67 @@ class TestFastAPIApp:
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             resp = await ac.post("/api/pipeline/stop")
             assert resp.status_code == 404
+
+
+class TestPipelineResumeHelpers:
+    def test_resolve_recoverable_run_prefers_existing_project_run(self, tmp_path: Path) -> None:
+        from researchclaw.config import RCConfig
+        from researchclaw.project.manager import ProjectManager
+        from researchclaw.server.routes.pipeline import (
+            PipelineStartRequest,
+            _resolve_recoverable_run,
+        )
+
+        projects_dir = tmp_path / "projects"
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("project:\n  name: test\nresearch:\n  topic: test\n", encoding="utf-8")
+        manager = ProjectManager(projects_dir)
+        project = manager.create("resume_proj", str(config_path), topic="resume topic")
+        run_id = manager.start_run("resume_proj", run_id="rc-20260104-000000-resume")
+        run_root = Path(project.run_dir) / run_id
+        run_root.mkdir(parents=True, exist_ok=True)
+        (run_root / "checkpoint.json").write_text(
+            json.dumps(
+                {
+                    "stage": 8,
+                    "stage_name": "HYPOTHESIS_GEN",
+                    "last_completed_stage": 8,
+                    "last_completed_name": "HYPOTHESIS_GEN",
+                }
+            ),
+            encoding="utf-8",
+        )
+        manager.finish_run("resume_proj", "failed")
+
+        cfg = RCConfig.from_dict(
+            {
+                "project": {"name": "test"},
+                "research": {"topic": "resume topic"},
+                "runtime": {"timezone": "UTC"},
+                "notifications": {"channel": "console"},
+                "knowledge_base": {"root": str(tmp_path / "knowledge")},
+                "llm": {
+                    "provider": "openai-compatible",
+                    "base_url": "http://localhost",
+                    "api_key_env": "TEST",
+                },
+                "multi_project": {
+                    "enabled": True,
+                    "projects_dir": str(projects_dir),
+                },
+            },
+            check_paths=False,
+        )
+        req = PipelineStartRequest(
+            project_id="resume_proj",
+            launch_mode="continue_existing_state",
+            resume=True,
+        )
+
+        recovered = _resolve_recoverable_run(cfg, req)
+
+        assert recovered is not None
+        recovered_run_id, recovered_dir, recovered_manager = recovered
+        assert recovered_run_id == run_id
+        assert recovered_dir == run_root
+        assert recovered_manager is not None
