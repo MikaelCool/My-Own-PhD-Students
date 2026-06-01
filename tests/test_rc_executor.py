@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -13,6 +14,8 @@ import pytest
 from researchclaw.adapters import AdapterBundle, WebhookMessageAdapter
 from researchclaw.config import RCConfig
 from researchclaw.pipeline import executor as rc_executor
+from researchclaw.pipeline._helpers import _chat_with_prompt
+from researchclaw.pipeline.stage_impls import _analysis as rc_analysis
 from researchclaw.pipeline.stages import Stage, StageStatus
 
 
@@ -126,6 +129,7 @@ def test_stage_result_dataclass_fields() -> None:
     assert result.error is None
     assert result.decision == "proceed"
     assert result.evidence_refs == ()
+    assert result.control_hints == {}
 
 
 def test_utcnow_iso_returns_valid_iso_timestamp() -> None:
@@ -253,6 +257,10 @@ def test_execute_stage_sends_stage_complete_summary_notification(
             "# Goal\n- Baseline-aware scope locked\n- Novel contribution target defined\n- Quality improves via early scoping\n",
             encoding="utf-8",
         )
+        (stage_dir / "goal_brief.md").write_text(
+            "- Brief goal summary\n",
+            encoding="utf-8",
+        )
         (stage_dir / "hardware_profile.json").write_text(
             json.dumps({"device": "cpu"}),
             encoding="utf-8",
@@ -260,7 +268,7 @@ def test_execute_stage_sends_stage_complete_summary_notification(
         return rc_executor.StageResult(
             stage=Stage.TOPIC_INIT,
             status=StageStatus.DONE,
-            artifacts=("goal.md", "hardware_profile.json"),
+            artifacts=("goal.md", "goal_brief.md", "hardware_profile.json"),
         )
 
     monkeypatch.setitem(rc_executor._STAGE_EXECUTORS, Stage.TOPIC_INIT, fake_executor)
@@ -282,6 +290,311 @@ def test_execute_stage_sends_stage_complete_summary_notification(
     assert "Innovation:" in completion_body
     assert "Advantages:" in completion_body
     assert "Baseline-aware scope locked" in completion_body
+
+
+def test_execute_stage_writes_run_control_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = RCConfig.from_dict(
+        {
+            "project": {"name": "control-state-test", "mode": "docs-first"},
+            "research": {"topic": "test topic"},
+            "runtime": {"timezone": "UTC"},
+            "notifications": {
+                "channel": "local",
+                "on_stage_start": True,
+                "on_stage_complete": False,
+                "on_stage_fail": False,
+                "on_gate_required": True,
+            },
+            "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
+            "openclaw_bridge": {"use_message": True, "use_memory": False},
+            "llm": {
+                "provider": "openai-compatible",
+                "base_url": "http://localhost:1234/v1",
+                "api_key_env": "RC_TEST_KEY",
+                "api_key": "inline-test-key",
+                "primary_model": "fake-model",
+            },
+        },
+        project_root=tmp_path,
+        check_paths=False,
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    def fake_executor(stage_dir, _run_dir, _config, _adapters, **_kwargs):
+        (stage_dir / "goal.md").write_text("# ok\n", encoding="utf-8")
+        (stage_dir / "goal_brief.md").write_text("- ok\n", encoding="utf-8")
+        (stage_dir / "hardware_profile.json").write_text(
+            json.dumps({"device": "cpu"}),
+            encoding="utf-8",
+        )
+        return rc_executor.StageResult(
+            stage=Stage.TOPIC_INIT,
+            status=StageStatus.DONE,
+            artifacts=("goal.md", "goal_brief.md", "hardware_profile.json"),
+        )
+
+    original = rc_executor._STAGE_EXECUTORS[Stage.TOPIC_INIT]
+    monkeypatch.setitem(rc_executor._STAGE_EXECUTORS, Stage.TOPIC_INIT, fake_executor)
+    try:
+        rc_executor.execute_stage(
+            Stage.TOPIC_INIT,
+            run_dir=run_dir,
+            run_id="run-exec-control",
+            config=config,
+            adapters=AdapterBundle(),
+        )
+    finally:
+        monkeypatch.setitem(rc_executor._STAGE_EXECUTORS, Stage.TOPIC_INIT, original)
+
+    control_state = cast(
+        dict[str, Any],
+        json.loads((run_dir / "run_control_state.json").read_text(encoding="utf-8")),
+    )
+    assert control_state["current_stage"] == int(Stage.TOPIC_INIT)
+    assert control_state["current_substep"] == "stage_complete"
+    assert control_state["active_session_backend"] == "openai-compatible"
+    assert control_state["latest_stage_result"]["status"] == StageStatus.DONE.value
+    assert control_state["observers"]["artifact_integrity"]["artifact_count"] == 3
+
+
+def test_build_stage_failure_body_includes_observer_summary(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run_control_state.json").write_text(
+        json.dumps(
+            {
+                "current_stage": 12,
+                "current_stage_name": "EXPERIMENT_RUN",
+                "current_substep": "stage_complete",
+                "waiting_reason": "",
+                "observers": {
+                    "stage_progress": {
+                        "current_stage": 12,
+                        "current_stage_name": "EXPERIMENT_RUN",
+                        "current_substep": "stage_complete",
+                        "status": "failed",
+                        "waiting_reason": "",
+                    },
+                    "session_health": {"backend": "openai-compatible"},
+                    "resource_state": {"waiting": False, "waiting_reason": ""},
+                    "risk_flags": ["stage_failed"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    stage12_dir = run_dir / "stage-12"
+    stage12_dir.mkdir()
+    (stage12_dir / "runtime_observer.json").write_text(
+        json.dumps(
+            {
+                "dataset_readiness": {
+                    "status": "blocked",
+                    "summary": "Dataset preparation is blocked by preflight errors.",
+                },
+                "gpu_availability": {"status": "ready", "summary": "Process-free GPUs detected."},
+                "runtime_watchdog": {"status": "failed", "summary": "Stage 12 failed before exhausting the time budget."},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    body = rc_executor._build_stage_failure_body(
+        stage=Stage.EXPERIMENT_RUN,
+        run_dir=run_dir,
+        run_id="run-fail-summary",
+        result=rc_executor.StageResult(
+            stage=Stage.EXPERIMENT_RUN,
+            status=StageStatus.FAILED,
+            artifacts=(),
+            error="boom",
+            decision="retry",
+        ),
+    )
+
+    assert "Focus: Dataset preparation is blocked by preflight errors." in body
+    assert "Alerts: dataset:blocked" in body
+
+
+def test_safe_notify_failure_writes_supervisor_event(
+    rc_config: RCConfig,
+    run_dir: Path,
+) -> None:
+    adapters = AdapterBundle()
+
+    def _fail_notify(channel: str, subject: str, body: str) -> str:
+        _ = channel, subject, body
+        raise RuntimeError("webhook timed out")
+
+    adapters.message.notify = _fail_notify  # type: ignore[method-assign]
+
+    rc_executor._safe_notify(
+        adapters,
+        rc_config,
+        subject="stage-10-fail",
+        body="boom",
+        run_dir=run_dir,
+    )
+
+    control_state = json.loads((run_dir / "run_control_state.json").read_text(encoding="utf-8"))
+    assert control_state["notification_state"]["last_status"] == "failed"
+    run_index = json.loads((run_dir / "run_index.json").read_text(encoding="utf-8"))
+    supervisor_events = [
+        item for item in run_index["events"] if item.get("event") == "supervisor_event"
+    ]
+    assert supervisor_events
+    latest = supervisor_events[-1]
+    assert latest["event_type"] == "notification_failed"
+    assert latest["error"] == "webhook timed out"
+    assert "notification_failed" in latest["alerts"]
+
+
+def test_write_backend_health_snapshot_records_session_switch(run_dir: Path) -> None:
+    fake_llm = SimpleNamespace(
+        describe_backend_health=lambda: {
+            "selected_backend": "openclaw_gateway",
+            "backend_order": ["openclaw_gateway", "acp_named_session", "acp_exec"],
+            "gateway_healthy": True,
+            "named_sessions_usable": False,
+            "session_ready": False,
+            "degraded": False,
+        }
+    )
+    rc_executor.write_control_state(
+        run_dir,
+        active_session_backend="acp:codex",
+        current_stage=int(Stage.CODE_GENERATION),
+        current_stage_name=Stage.CODE_GENERATION.name,
+    )
+
+    rc_executor._write_backend_health_snapshot(
+        run_dir=run_dir,
+        run_id="run-backend",
+        stage=Stage.CODE_GENERATION,
+        config=SimpleNamespace(llm=SimpleNamespace(provider="acp")),
+        llm=fake_llm,
+    )
+
+    control_state = json.loads((run_dir / "run_control_state.json").read_text(encoding="utf-8"))
+    assert control_state["active_session_backend"] == "openclaw_gateway"
+    assert control_state["session_backend_state"]["gateway_healthy"] is True
+    run_index = json.loads((run_dir / "run_index.json").read_text(encoding="utf-8"))
+    supervisor_events = [
+        item for item in run_index["events"] if item.get("event") == "supervisor_event"
+    ]
+    assert supervisor_events[-1]["event_type"] == "session_switched"
+    assert supervisor_events[-1]["from_backend"] == "acp:codex"
+    assert supervisor_events[-1]["to_backend"] == "openclaw_gateway"
+
+
+def test_execute_stage_gate_block_writes_human_review_supervisor_event(
+    rc_config: RCConfig,
+    run_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_prior_artifact(run_dir, 4, "candidates.jsonl", '{"title": "paper"}\n')
+
+    def fake_executor(
+        stage_dir: Path,
+        run_dir_arg: Path,
+        config: RCConfig,
+        adapters: AdapterBundle,
+        *,
+        llm: object = None,
+        prompts: object = None,
+    ) -> rc_executor.StageResult:
+        _ = stage_dir, run_dir_arg, config, adapters, llm, prompts
+        (stage_dir / "screening.json").write_text("{}", encoding="utf-8")
+        return rc_executor.StageResult(
+            stage=Stage.LITERATURE_SCREEN,
+            status=StageStatus.DONE,
+            artifacts=("screening.json",),
+        )
+
+    original = rc_executor._STAGE_EXECUTORS[Stage.LITERATURE_SCREEN]
+    monkeypatch.setitem(
+        rc_executor._STAGE_EXECUTORS,
+        Stage.LITERATURE_SCREEN,
+        fake_executor,
+    )
+    try:
+        result = rc_executor.execute_stage(
+            Stage.LITERATURE_SCREEN,
+            run_dir=run_dir,
+            run_id="run-gate-block",
+            config=rc_config,
+            adapters=AdapterBundle(),
+            auto_approve_gates=False,
+        )
+    finally:
+        monkeypatch.setitem(rc_executor._STAGE_EXECUTORS, Stage.LITERATURE_SCREEN, original)
+
+    assert result.status == StageStatus.BLOCKED_APPROVAL
+    run_index = json.loads((run_dir / "run_index.json").read_text(encoding="utf-8"))
+    supervisor_events = [
+        item for item in run_index["events"] if item.get("event") == "supervisor_event"
+    ]
+    assert supervisor_events[-1]["event_type"] == "human_review_needed"
+    assert supervisor_events[-1]["stage"] == int(Stage.LITERATURE_SCREEN)
+    assert "human_review_needed" in supervisor_events[-1]["alerts"]
+
+
+def test_execute_stage_failed_quality_gate_writes_supervisor_event(
+    rc_config: RCConfig,
+    run_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_prior_artifact(run_dir, 19, "paper_revised.md", "# Revised Paper\n")
+
+    def fake_executor(
+        stage_dir: Path,
+        run_dir_arg: Path,
+        config: RCConfig,
+        adapters: AdapterBundle,
+        *,
+        llm: object = None,
+        prompts: object = None,
+    ) -> rc_executor.StageResult:
+        _ = stage_dir, run_dir_arg, config, adapters, llm, prompts
+        (stage_dir / "quality_report.json").write_text("{}", encoding="utf-8")
+        return rc_executor.StageResult(
+            stage=Stage.QUALITY_GATE,
+            status=StageStatus.FAILED,
+            artifacts=("quality_report.json",),
+            error="novelty score below threshold",
+            decision="rollback",
+        )
+
+    original = rc_executor._STAGE_EXECUTORS[Stage.QUALITY_GATE]
+    monkeypatch.setitem(
+        rc_executor._STAGE_EXECUTORS,
+        Stage.QUALITY_GATE,
+        fake_executor,
+    )
+    try:
+        result = rc_executor.execute_stage(
+            Stage.QUALITY_GATE,
+            run_dir=run_dir,
+            run_id="run-quality-block",
+            config=rc_config,
+            adapters=AdapterBundle(),
+            auto_approve_gates=True,
+        )
+    finally:
+        monkeypatch.setitem(rc_executor._STAGE_EXECUTORS, Stage.QUALITY_GATE, original)
+
+    assert result.status == StageStatus.FAILED
+    run_index = json.loads((run_dir / "run_index.json").read_text(encoding="utf-8"))
+    supervisor_events = [
+        item for item in run_index["events"] if item.get("event") == "supervisor_event"
+    ]
+    assert supervisor_events[-1]["event_type"] == "quality_gate_blocked"
+    assert supervisor_events[-1]["status"] == "error"
+    assert supervisor_events[-1]["decision"] == "rollback"
+    assert supervisor_events[-1]["error"] == "novelty score below threshold"
 
 
 def test_build_context_preamble_basic_fields(
@@ -333,6 +646,54 @@ def test_build_context_preamble_includes_anchor_claims_and_matrix(
     assert "matrix content" in text
     assert "### Claims From Results" in text
     assert "claim gate content" in text
+
+
+def test_build_context_preamble_preserves_late_phase2_missing_experiments(
+    rc_config: RCConfig, run_dir: Path
+) -> None:
+    filler = ("Background paragraph.\n\n" * 120).strip()
+    _write_prior_artifact(
+        run_dir,
+        15,
+        "phase2_handoff.md",
+        (
+            f"# Phase 2 Handoff\n\n{filler}\n\n"
+            "### Exact missing experiments that would unblock the paper\n"
+            "1. Run `cheap_proxy_controller`, `probe_control`, and `adalora_like_budget` "
+            "under matched settings.\n"
+        ),
+    )
+
+    text = rc_executor._build_context_preamble(rc_config, run_dir)
+
+    assert "### Phase 2 Handoff" in text
+    assert "Exact missing experiments that would unblock the paper" in text
+    assert "cheap_proxy_controller" in text
+    assert "adalora_like_budget" in text
+
+
+def test_build_context_preamble_compact_preserves_late_phase2_missing_experiments(
+    rc_config: RCConfig, run_dir: Path
+) -> None:
+    filler = ("Background paragraph.\n\n" * 120).strip()
+    _write_prior_artifact(
+        run_dir,
+        15,
+        "phase2_handoff.md",
+        (
+            f"# Phase 2 Handoff\n\n{filler}\n\n"
+            "### Exact missing experiments that would unblock the paper\n"
+            "1. Run `cheap_proxy_controller`, `probe_control`, and `adalora_like_budget` "
+            "under matched settings.\n"
+        ),
+    )
+
+    text = rc_executor._build_context_preamble(rc_config, run_dir, compact=True)
+
+    assert "### Phase 2 Handoff" in text
+    assert "Exact missing experiments that would unblock the paper" in text
+    assert "cheap_proxy_controller" in text
+    assert "adalora_like_budget" in text
 
 
 def test_build_context_preamble_includes_startup_contract_and_launch_mode(
@@ -473,7 +834,11 @@ def test_execute_stage_creates_stage_dir_writes_artifacts_and_meta(
     )
     assert decision["run_id"] == "run-1"
     assert decision["status"] == "done"
-    assert decision["output_artifacts"] == ["goal.md", "hardware_profile.json"]
+    assert decision["output_artifacts"] == [
+        "goal.md",
+        "goal_brief.md",
+        "hardware_profile.json",
+    ]
 
 
 def test_execute_stage_contract_validation_missing_output_file_marks_failed(
@@ -1048,6 +1413,33 @@ class TestIterativeRefine:
             for artifact in result.artifacts
         )
 
+    def test_refine_fails_completion_gate_when_no_valid_metric(
+        self,
+        run_dir: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+    ) -> None:
+        self._prepare_refine_inputs(run_dir)
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        llm = FakeLLMClient("```python\nthis is not valid python\n```")
+
+        result = rc_executor._execute_iterative_refine(
+            stage_dir,
+            run_dir,
+            rc_config,
+            adapters,
+            llm=llm,
+        )
+
+        payload = json.loads(
+            (stage_dir / "refinement_log.json").read_text(encoding="utf-8")
+        )
+        assert result.status == StageStatus.FAILED
+        assert result.decision == "retry"
+        assert payload["completion_gate"]["ok"] is False
+        assert "best_metric_missing" in payload["completion_gate"]["reasons"]
+
     def test_refine_sandbox_mode_runs_code(
         self,
         tmp_path: Path,
@@ -1127,6 +1519,1276 @@ class TestIterativeRefine:
         assert any(
             "sandbox" in iteration for iteration in payload.get("iterations", [])
         )
+
+    def test_refine_incremental_replay_skips_first_llm_rewrite(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        import sys
+
+        self._prepare_refine_inputs(run_dir)
+        stage_dir = run_dir / "stage-13"
+        resume_dir = stage_dir / "experiment"
+        resume_dir.mkdir(parents=True, exist_ok=True)
+        (resume_dir / "main.py").write_text(
+            (
+                "from helper import cached_metric\n"
+                "print(f'val_loss: {cached_metric():.4f}')\n"
+            ),
+            encoding="utf-8",
+        )
+        (resume_dir / "helper.py").write_text(
+            "def cached_metric() -> float:\n    return 0.1234\n",
+            encoding="utf-8",
+        )
+        (resume_dir / "resume_seed_registry.json").write_text(
+            json.dumps(
+                {
+                    "conditions": {
+                        "cheap_proxy_controller": {
+                            "0": {"primary_metric": 0.1234}
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        data = {
+            "project": {"name": "rc-test", "mode": "docs-first"},
+            "research": {
+                "topic": "test-driven science",
+                "domains": ["ml", "systems"],
+                "daily_paper_count": 2,
+                "quality_threshold": 8.2,
+            },
+            "runtime": {"timezone": "UTC"},
+            "notifications": {
+                "channel": "local",
+                "on_stage_start": True,
+                "on_stage_fail": False,
+                "on_gate_required": True,
+            },
+            "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
+            "openclaw_bridge": {"use_memory": True, "use_message": True},
+            "llm": {
+                "provider": "openai-compatible",
+                "base_url": "http://localhost:1234/v1",
+                "api_key_env": "RC_TEST_KEY",
+                "api_key": "inline-test-key",
+                "primary_model": "fake-model",
+                "fallback_models": [],
+            },
+            "security": {"hitl_required_stages": [5, 9, 20]},
+            "experiment": {
+                "mode": "sandbox",
+                "time_budget_sec": 30,
+                "max_iterations": 1,
+                "metric_key": "val_loss",
+                "metric_direction": "minimize",
+                "sandbox": {
+                    "python_path": sys.executable,
+                    "gpu_required": False,
+                    "max_memory_mb": 1024,
+                },
+            },
+        }
+        sandbox_config = RCConfig.from_dict(
+            data,
+            project_root=tmp_path,
+            check_paths=False,
+        )
+        llm = FakeLLMClient("```python\nraise RuntimeError('llm rewrite should be skipped')\n```")
+
+        rc_executor._execute_iterative_refine(
+            stage_dir,
+            run_dir,
+            sandbox_config,
+            adapters,
+            llm=llm,
+        )
+
+        assert len(llm.calls) == 0
+        payload = json.loads(
+            (stage_dir / "refinement_log.json").read_text(encoding="utf-8")
+        )
+        assert payload["incremental_refine_available"] is True
+        assert payload["iterations"][0]["incremental_replay"] is True
+        assert payload["iterations"][0]["incremental_plan"]["reason"] == "run_local_replay"
+        assert (stage_dir / "experiment_v1" / "helper.py").exists()
+        assert (
+            stage_dir / "experiment_v1" / "resume_seed_registry.json"
+        ).exists()
+        main_code = (stage_dir / "experiment_v1" / "main.py").read_text(
+            encoding="utf-8"
+        )
+        assert "cached_metric" in main_code
+
+    def test_build_stage13_incremental_plan_skips_when_no_change(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        stage_dir = tmp_path / "stage-13"
+        stage_dir.mkdir(parents=True)
+        results_dir = stage_dir / "refine_sandbox_v1" / "_docker_project_1"
+        results_dir.mkdir(parents=True)
+        (results_dir / "results.json").write_text(
+            json.dumps(
+                {
+                    "metrics": {
+                        "full_finetuning_seed_0": 0.71,
+                        "full_finetuning_seed_1": 0.72,
+                        "full_finetuning_seed_2": 0.73,
+                        "qlora_fixed_seed_0": 0.61,
+                        "qlora_fixed_seed_1": 0.62,
+                        "qlora_fixed_seed_2": 0.63,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        config_text = (
+            'register("full_finetuning", "FullFineTuningCondition", "baseline", False, False, [])\n'
+            'register("qlora_fixed", "QLoRACondition", "baseline", True, False, [])\n'
+            'self.screening_seeds: list[int] = [0, 1, 2]\n'
+            'self.active_condition_names: list[str] = ["full_finetuning", "qlora_fixed"]\n'
+        )
+        best_files = {"config.py": config_text, "main.py": "print('ok')\n"}
+        plan = rc_execution_impl._build_stage13_incremental_plan(
+            stage_dir=stage_dir,
+            best_files=best_files,
+            candidate_files=dict(best_files),
+            condition_coverage_hint="",
+        )
+        assert plan["active"] is False
+        assert plan["reason"] == "no_executable_change"
+
+    def test_stage13_incremental_replay_is_blocked_by_baseline_coverage_gap(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        assert rc_execution_impl._should_use_stage13_incremental_replay(
+            incremental_refine_available=True,
+            interrupted_resume_project_dir=Path("/tmp/interrupted"),
+            iteration=1,
+            preflight_incremental_plan={"reason": "coverage_gap_replay"},
+            method_diagnosis_payload={"baseline_coverage_gap": True},
+        ) is False
+
+    def test_stage13_incremental_replay_still_handles_interrupted_resume_without_gap(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        assert rc_execution_impl._should_use_stage13_incremental_replay(
+            incremental_refine_available=True,
+            interrupted_resume_project_dir=Path("/tmp/interrupted"),
+            iteration=1,
+            preflight_incremental_plan={"reason": "coverage_gap_replay"},
+            method_diagnosis_payload={"baseline_coverage_gap": False},
+        ) is True
+
+    def test_stage13_parallel_wrapper_supports_plain_main_entrypoint(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        main_text = (
+            "from __future__ import annotations\n\n"
+            "import json\n"
+            "import os\n"
+            "from pathlib import Path\n\n"
+            "REQUIRED_ACTIVE_CONDITIONS: list[str] = [\n"
+            '    "lora_fixed",\n'
+            '    "probe_control",\n'
+            '    "cheap_proxy_controller",\n'
+            "]\n\n"
+            "def main() -> None:\n"
+            "    print(REQUIRED_ACTIVE_CONDITIONS)\n\n"
+            'if __name__ == "__main__":\n'
+            "    main()\n"
+        )
+
+        wrapped = rc_execution_impl._ensure_stage13_main_parallel_wrapper(main_text)
+
+        assert "def _stage13_single_worker_main() -> None:" in wrapped
+        assert "def _run_parallel_stage13_subprocess_if_requested() -> bool:" in wrapped
+        assert "PARALLEL_STAGE13_START" in wrapped
+        assert "CUDA_VISIBLE_DEVICES" in wrapped
+        assert 'env["CUDA_VISIBLE_DEVICES"] = str(worker_index)' in wrapped
+        assert 'if __name__ == "__main__":\n    main()' in wrapped
+
+    def test_stage13_parallel_wrapper_uses_container_local_cuda_indices(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        main_text = (
+            "from __future__ import annotations\n\n"
+            "import json\n"
+            "import os\n"
+            "import torch\n"
+            "from pathlib import Path\n\n"
+            "ACTIVE_CONDITIONS: list[str] = [\n"
+            '    "lora_fixed",\n'
+            '    "dora",\n'
+            "]\n\n"
+            "def _json_ready(value: Any) -> Any:\n"
+            "    return value\n\n"
+            "def _run_stage13_experiment(output_suffix: str = '') -> None:\n"
+            "    print(output_suffix)\n\n"
+            "def main() -> None:\n"
+            "    _run_stage13_experiment()\n\n"
+            'if __name__ == "__main__":\n'
+            "    main()\n"
+        )
+
+        wrapped = rc_execution_impl._ensure_stage13_main_parallel_wrapper(main_text)
+
+        assert 'os.environ["CUDA_VISIBLE_DEVICES"] = str(worker_index)' in wrapped
+        assert '"physical_gpu_id": str(assigned_gpu_id)' in wrapped
+
+    def test_stage13_baseline_grid_is_forced_into_regenerated_project(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        candidate_files = {
+            "config.py": (
+                "class ExperimentConfig:\n"
+                "    def __init__(self) -> None:\n"
+                "        self.active_condition_names: list[str] = [\n"
+                '            "lora_fixed",\n'
+                '            "qlora_fixed",\n'
+                '            "probe_control",\n'
+                "        ]\n"
+                '        self.precision: str = "float32"\n'
+                "        self.condition_registry = []\n"
+                "    def validate(self) -> None:\n"
+                "        if len(self.condition_registry) > 8:\n"
+                '            raise ValueError("Active condition count must be <= 8.")\n'
+            ),
+            "main.py": (
+                "REQUIRED_ACTIVE_CONDITIONS: list[str] = [\n"
+                '    "lora_fixed",\n'
+                '    "qlora_fixed",\n'
+                '    "probe_control",\n'
+                "]\n"
+                'config.precision = "float32"\n'
+                'os.environ.setdefault("EXPERIMENT_PRECISION", "float32")\n'
+            ),
+        }
+        diagnosis_payload = {
+            "baseline_coverage_gap": True,
+            "required_baseline_conditions": [
+                "lora_fixed",
+                "lora_fixed_matched_rank",
+                "dora",
+                "pissa_init",
+                "milora_init",
+                "lora_ga_init",
+                "sensitivity_lora",
+                "full_finetuning",
+                "lora_fa",
+                "adalora_like_budget",
+                "qlora_fixed",
+            ],
+            "missing_active_conditions": ["dora", "lora_fa", "adalora_like_budget"],
+        }
+
+        enforced = rc_execution_impl._enforce_stage13_required_baseline_grid(
+            dict(candidate_files),
+            diagnosis_payload,
+        )
+
+        main_text = enforced["main.py"]
+        config_text = enforced["config.py"]
+        for condition_name in [
+            "lora_fixed_matched_rank",
+            "dora",
+            "pissa_init",
+            "milora_init",
+            "lora_ga_init",
+            "sensitivity_lora",
+            "full_finetuning",
+            "lora_fa",
+            "adalora_like_budget",
+            "cheap_proxy_controller",
+            "exact_svd_oracle_controller",
+            "falcon_qb_init_plus_cheap_proxy",
+        ]:
+            assert condition_name in main_text
+            assert condition_name in config_text
+        assert "Active condition count must be <= 8" not in config_text
+        assert 'self.precision: str = "bf16"' in config_text
+        assert 'config.precision = "bf16"' in main_text
+        assert 'os.environ.setdefault("EXPERIMENT_PRECISION", "bf16")' in main_text
+        assert '"float32"' not in main_text
+
+    def test_stage13_bf16_precision_is_forced_without_baseline_gap(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        enforced = rc_execution_impl._enforce_stage13_required_baseline_grid(
+            {
+                "config.py": 'self.precision: str = "float32"\n',
+                "main.py": (
+                    'config.precision = "float32"\n'
+                    'os.environ.setdefault("EXPERIMENT_PRECISION", "float32")\n'
+                ),
+            },
+            {"baseline_coverage_gap": False},
+        )
+
+        assert 'self.precision: str = "bf16"' in enforced["config.py"]
+        assert 'config.precision = "bf16"' in enforced["main.py"]
+        assert 'os.environ.setdefault("EXPERIMENT_PRECISION", "bf16")' in enforced["main.py"]
+
+    def test_stage13_full_ft_uses_stateless_optimizer_without_baseline_gap(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        enforced = rc_execution_impl._enforce_stage13_required_baseline_grid(
+            {
+                "methods.py": (
+                    "class NumpyAdamW:\n"
+                    "    def __init__(\n"
+                    "        self,\n"
+                    "        params: list[nn.Parameter],\n"
+                    "        lr: float,\n"
+                    "        betas: tuple[float, float] = (0.9, 0.999),\n"
+                    "        eps: float = 1.0e-8,\n"
+                    "        weight_decay: float = 0.0,\n"
+                    "        max_grad_norm: float = 1.0,\n"
+                    "    ) -> None:\n"
+                    "        self.max_grad_norm = float(max_grad_norm)\n"
+                    "        self.state: dict[int, dict[str, Any]] = {}\n"
+                    "    def step(self) -> None:\n"
+                    "        for param in self.params:\n"
+                    "            grad = torch.nan_to_num(param.grad.detach(), nan=0.0, posinf=0.0, neginf=0.0)\n"
+                    "            param_id = id(param)\n"
+                ),
+                "evaluate.py": (
+                    "    def _optimizer_for_model(self, model: BackboneWithAdapters) -> NumpyAdamW:\n"
+                    "        lr = float(self.config.learning_rate_full_ft) if str(model.mode) == \"full_ft\" else float(self.config.learning_rate_peft)\n"
+                    "        return NumpyAdamW(\n"
+                    "            [param for param in model.parameters() if param.requires_grad],\n"
+                    "            lr=lr,\n"
+                    "            weight_decay=float(self.config.weight_decay),\n"
+                    "            max_grad_norm=float(self.config.max_grad_norm),\n"
+                    "        )\n"
+                ),
+            },
+            {"baseline_coverage_gap": False},
+        )
+
+        assert "use_moments: bool = True" in enforced["methods.py"]
+        assert "if not self.use_moments:" in enforced["methods.py"]
+        assert "use_moments = str(model.mode) != \"full_ft\"" in enforced["evaluate.py"]
+        assert "use_moments=use_moments" in enforced["evaluate.py"]
+
+    def test_stage13_adapter_weights_align_to_bf16_activation_dtype(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        enforced = rc_execution_impl._enforce_stage13_required_baseline_grid(
+            {
+                "methods.py": (
+                    "class DoRALinear(nn.Module):\n"
+                    "    def forward(self, x: torch.Tensor) -> torch.Tensor:\n"
+                    "        scaled_weight = self.base_linear.weight.float() * self.magnitude\n"
+                    "        return F.linear(x, scaled_weight, self.base_linear.bias)\n"
+                ),
+            },
+            {"baseline_coverage_gap": False},
+        )
+
+        assert "scaled_weight = scaled_weight.to(dtype=x.dtype, device=x.device)" in enforced["methods.py"]
+        assert "bias = self.base_linear.bias" in enforced["methods.py"]
+        assert "return F.linear(x, scaled_weight, bias)" in enforced["methods.py"]
+
+    def test_stage13_adapter_dtype_alignment_preserves_dora_branch_indent(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        enforced = rc_execution_impl._enforce_stage13_required_baseline_grid(
+            {
+                "methods.py": (
+                    "class LoRALinear(nn.Module):\n"
+                    "    def forward(self, x: torch.Tensor) -> torch.Tensor:\n"
+                    "        if self.use_dora and self.dora_magnitude is not None:\n"
+                    "            weight = self.base_linear.weight + self.delta_weight()\n"
+                    "            scaled_weight = weight * self.dora_magnitude.unsqueeze(1)\n"
+                    "            return F.linear(x, scaled_weight, self.base_linear.bias)\n"
+                    "        base = self.base_linear(x)\n"
+                    "        return base\n"
+                ),
+            },
+            {"baseline_coverage_gap": False},
+        )
+
+        methods_text = enforced["methods.py"]
+        assert "            scaled_weight = scaled_weight.to(dtype=x.dtype, device=x.device)" in methods_text
+        assert "            return F.linear(x, scaled_weight, bias)" in methods_text
+        assert "        return F.linear(x, scaled_weight, bias)" not in methods_text.splitlines()
+
+    def test_stage13_adapter_dtype_alignment_repairs_polluted_partial_code(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        enforced = rc_execution_impl._enforce_stage13_required_baseline_grid(
+            {
+                "methods.py": (
+                    "class LoRALinear(nn.Module):\n"
+                    "    def forward(self, x: torch.Tensor) -> torch.Tensor:\n"
+                    "        if self.use_dora and self.dora_magnitude is not None:\n"
+                    "            scaled_weight = self.base_linear.weight\n"
+                    "            scaled_weight = scaled_weight.to(dtype=x.dtype, device=x.device)\n"
+                    "        bias = self.base_linear.bias\n"
+                    "        if bias is not None:\n"
+                    "            bias = bias.to(dtype=x.dtype, device=x.device)\n"
+                    "        return F.linear(x, scaled_weight, bias)\n"
+                    "        base = self.base_linear(x)\n"
+                    "        return base\n"
+                ),
+            },
+            {"baseline_coverage_gap": False},
+        )
+
+        lines = enforced["methods.py"].splitlines()
+        assert "            bias = self.base_linear.bias" in lines
+        assert "            return F.linear(x, scaled_weight, bias)" in lines
+        assert "        bias = self.base_linear.bias" not in lines
+        assert "        return F.linear(x, scaled_weight, bias)" not in lines
+
+    def test_stage13_missing_related_work_baselines_are_injected(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        candidate_files = {
+            "config.py": (
+                "    def build_condition_registry(self) -> list[dict[str, object]]:\n"
+                "        registry: list[dict[str, object]] = []\n"
+                "        def register(name, class_name, family, quantized, adaptive, datasets):\n"
+                "            registry.append({'name': name, 'class_name': class_name})\n"
+                '        register("sensitivity_lora", "SensitivityLoRACondition", "recent_baseline", False, True, [])\n'
+                "        active_names = list(self.active_condition_names)\n"
+                "        return [entry for entry in registry if entry['name'] in set(active_names)]\n"
+            ),
+            "methods.py": (
+                "class FixedLoRACondition: pass\n"
+                "class SensitivityLoRACondition(FixedLoRACondition): pass\n"
+                "class FalconQBPreparationMixin: pass\n"
+                "CONDITION_CLASS_REGISTRY: dict[str, object] = {\n"
+                '    "sensitivity_lora": SensitivityLoRACondition,\n'
+                "}\n"
+            ),
+        }
+
+        enforced = rc_execution_impl._enforce_stage13_required_baseline_grid(
+            candidate_files,
+            {
+                "baseline_coverage_gap": True,
+                "missing_registered_conditions": ["lora_fa", "adalora_like_budget"],
+            },
+        )
+
+        assert 'register("lora_fa", "LoRAFACondition"' in enforced["config.py"]
+        assert 'register("adalora_like_budget", "AdaLoRALikeBudgetCondition"' in enforced["config.py"]
+        assert "class LoRAFACondition" in enforced["methods.py"]
+        assert "class AdaLoRALikeBudgetCondition" in enforced["methods.py"]
+        assert '"lora_fa": LoRAFACondition' in enforced["methods.py"]
+        assert '"adalora_like_budget": AdaLoRALikeBudgetCondition' in enforced["methods.py"]
+
+    def test_stage13_interrupted_resume_uses_deterministic_full_grid_replay(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        assert rc_execution_impl._should_use_stage13_deterministic_baseline_replay(
+            candidate_files={
+                "main.py": "print('main')\n",
+                "config.py": "class Config: pass\n",
+                "methods.py": "class Method: pass\n",
+            },
+            method_diagnosis_payload={"baseline_coverage_gap": True},
+            interrupted_resume_project_dir=Path("/tmp/interrupted"),
+        ) is True
+        assert rc_execution_impl._should_use_stage13_deterministic_baseline_replay(
+            candidate_files={"main.py": "print('main')\n"},
+            method_diagnosis_payload={"baseline_coverage_gap": True},
+            interrupted_resume_project_dir=Path("/tmp/interrupted"),
+        ) is False
+        assert rc_execution_impl._should_use_stage13_deterministic_baseline_replay(
+            candidate_files={
+                "main.py": "print('main')\n",
+                "config.py": "class Config: pass\n",
+                "methods.py": "class Method: pass\n",
+            },
+            method_diagnosis_payload={"baseline_coverage_gap": False},
+            interrupted_resume_project_dir=Path("/tmp/interrupted"),
+        ) is True
+        assert rc_execution_impl._should_use_stage13_deterministic_baseline_replay(
+            candidate_files={
+                "main.py": "print('main')\n",
+                "config.py": "class Config: pass\n",
+                "methods.py": "class Method: pass\n",
+            },
+            method_diagnosis_payload={"baseline_coverage_gap": True},
+            interrupted_resume_project_dir=None,
+        ) is False
+
+    def test_stage13_manual_redesign_replays_recovered_best_code_without_llm(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        assert rc_execution_impl._should_use_stage13_deterministic_baseline_replay(
+            candidate_files={
+                "main.py": "print('main')\n",
+                "config.py": "class Config: pass\n",
+                "methods.py": "class Method: pass\n",
+            },
+            method_diagnosis_payload={"baseline_coverage_gap": False},
+            interrupted_resume_project_dir=None,
+            manual_redesign_active=True,
+        ) is True
+
+    def test_stage13_latest_experiment_version_is_resume_source(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        stage_dir = tmp_path / "stage-13"
+        (stage_dir / "experiment_v1").mkdir(parents=True)
+        (stage_dir / "experiment_v2").mkdir(parents=True)
+        (stage_dir / "experiment_v1" / "main.py").write_text("v1\n", encoding="utf-8")
+        (stage_dir / "experiment_v2" / "main.py").write_text("v2\n", encoding="utf-8")
+
+        assert (
+            rc_execution_impl._latest_stage13_experiment_version_dir(stage_dir)
+            == stage_dir / "experiment_v2"
+        )
+
+    def test_stage13_trusted_deterministic_replay_skips_wrapper_security_scan(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        validation = rc_execution_impl._validate_stage13_candidate_main(
+            "import subprocess\nsubprocess.Popen(['echo', 'ok'])\n",
+            trusted_deterministic_replay=True,
+        )
+
+        assert validation.ok is True
+
+    def test_stage13_parallel_worker_partial_checkpoint_resumes_from_root_project(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        stage_dir = tmp_path / "stage-13"
+        worker_dir = stage_dir / "refine_sandbox_v1" / "_docker_project_1" / "_parallel_group2_dora"
+        worker_dir.mkdir(parents=True)
+        root_dir = worker_dir.parent
+        (root_dir / "main.py").write_text("print('root')\n", encoding="utf-8")
+        (worker_dir / "main.py").write_text("print('worker')\n", encoding="utf-8")
+        (worker_dir / "partial_results.json").write_text(
+            json.dumps(
+                {
+                    "status": "partial",
+                    "results": [
+                        {
+                            "condition_name": "dora",
+                            "seed": 1,
+                            "primary_metric": 0.42,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert rc_execution_impl._latest_stage13_partial_project_dir(stage_dir) == root_dir
+        assert rc_execution_impl._load_stage13_condition_seed_cache(stage_dir) == {
+            "dora": {1: 0.42}
+        }
+
+    def test_stage13_parallel_wrapper_persists_partial_payload_before_failure(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        wrapped = rc_execution_impl._ensure_stage13_main_parallel_wrapper(
+            "import os\n"
+            "import json\n"
+            "import math\n"
+            "from pathlib import Path\n"
+            "ACTIVE_CONDITIONS = ['a', 'b']\n"
+            "def main() -> None:\n"
+            "    pass\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n"
+        )
+
+        assert "allow_partial: bool = False" in wrapped
+        assert "worker_failures" in wrapped
+        assert "_merge_parallel_worker_payloads(selected_groups, assigned_gpu_ids, allow_partial=True)" in wrapped
+
+    def test_stage13_detects_context_overflow_instead_of_treating_it_as_code(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        assert rc_execution_impl._stage13_llm_response_is_context_overflow(
+            "Context overflow: prompt too large for the model. Try /reset."
+        )
+
+    def test_stage13_stage15_refine_handoff_invalidates_completed_cache(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        run_dir = tmp_path / "run"
+        stage_dir = run_dir / "stage-13"
+        stage15_dir = run_dir / "stage-15"
+        results_dir = stage_dir / "refine_sandbox_v1" / "_docker_project_1"
+        results_dir.mkdir(parents=True)
+        stage15_dir.mkdir(parents=True)
+        (stage15_dir / "decision_structured.json").write_text(
+            json.dumps({"decision": "refine"}),
+            encoding="utf-8",
+        )
+        (stage15_dir / "phase2_handoff.md").write_text(
+            (
+                "**REFINE**\n\n"
+                "### 最关键的 3 个补实验\n"
+                "1. 公平同版本核心重跑: `lora_fixed`, `qlora_fixed`, "
+                "`cheap_proxy_controller`, `probe_control`, "
+                "`exact_svd_oracle_controller`.\n"
+                "2. QB-init × controller 二因素消融: QB init + cheap proxy.\n"
+                "3. 严格 H1 matched-budget 对照.\n"
+            ),
+            encoding="utf-8",
+        )
+        (results_dir / "results.json").write_text(
+            json.dumps(
+                {
+                    "metrics": {
+                        "lora_fixed_seed_0": 0.1,
+                        "lora_fixed_seed_1": 0.1,
+                        "lora_fixed_seed_2": 0.1,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        payload = rc_execution_impl._ensure_stage13_refine_handoff_manual_redesign(
+            run_dir=run_dir,
+            stage_dir=stage_dir,
+        )
+
+        assert payload is not None
+        assert payload["source_stage"] == 15
+        assert payload["cache_policy"] == "invalidate_existing_stage13_cache_for_refine_handoff"
+        assert "lora_fixed" in payload["active_conditions"]
+        assert "falcon_qb_init_plus_cheap_proxy" in payload["active_conditions"]
+        assert (stage_dir / "manual_redesign.json").is_file()
+        assert rc_execution_impl._load_stage13_condition_seed_cache(stage_dir) == {}
+        assert (results_dir / "results.json").is_file()
+
+    def test_stage13_manual_redesign_active_conditions_reads_json_payload(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        stage_dir = tmp_path / "stage-13"
+        stage_dir.mkdir(parents=True)
+        (stage_dir / "manual_redesign.json").write_text(
+            json.dumps({"active_conditions": ["probe_control", "cheap_proxy_controller"]}),
+            encoding="utf-8",
+        )
+
+        assert rc_execution_impl._stage13_manual_redesign_active_conditions(stage_dir) == [
+            "probe_control",
+            "cheap_proxy_controller",
+        ]
+
+    def test_stage13_manual_redesign_complete_results_survive_later_partial_checkpoint(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        stage_dir = tmp_path / "stage-13"
+        stage_dir.mkdir(parents=True)
+        manual = stage_dir / "manual_redesign.json"
+        manual.write_text(
+            json.dumps({"active_conditions": ["lora_fixed", "falcon_qb_activation_rank"]}),
+            encoding="utf-8",
+        )
+        complete_dir = stage_dir / "refine_sandbox_v1_resume_complete" / "_docker_project_1"
+        complete_dir.mkdir(parents=True)
+        (complete_dir / "results.json").write_text(
+            json.dumps(
+                {
+                    "status": "completed",
+                    "results": [
+                        {"condition_name": "lora_fixed", "seed": 0, "primary_metric": 0.24},
+                        {"condition_name": "lora_fixed", "seed": 1, "primary_metric": 0.25},
+                        {"condition_name": "lora_fixed", "seed": 2, "primary_metric": 0.26},
+                        {
+                            "condition_name": "falcon_qb_activation_rank",
+                            "seed": 0,
+                            "primary_metric": 0.20,
+                        },
+                        {
+                            "condition_name": "falcon_qb_activation_rank",
+                            "seed": 1,
+                            "primary_metric": 0.19,
+                        },
+                        {
+                            "condition_name": "falcon_qb_activation_rank",
+                            "seed": 2,
+                            "primary_metric": 0.18,
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        later_partial_dir = (
+            stage_dir / "refine_sandbox_v1_resume_later_partial" / "_docker_project_1"
+        )
+        later_partial_dir.mkdir(parents=True)
+        (later_partial_dir / "partial_results.json").write_text(
+            json.dumps(
+                {
+                    "status": "partial",
+                    "results": [
+                        {"condition_name": "lora_fixed", "seed": 0, "primary_metric": 0.24}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        os.utime(manual, (100.0, 100.0))
+        os.utime(complete_dir / "results.json", (200.0, 200.0))
+        os.utime(later_partial_dir / "partial_results.json", (300.0, 300.0))
+
+        cache = rc_execution_impl._load_stage13_condition_seed_cache(stage_dir)
+
+        assert sorted(cache) == ["falcon_qb_activation_rank", "lora_fixed"]
+        assert sorted(cache["lora_fixed"]) == [0, 1, 2]
+        assert sorted(cache["falcon_qb_activation_rank"]) == [0, 1, 2]
+
+    def test_stage13_manual_redesign_keeps_newer_partial_resume_cache(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        stage_dir = tmp_path / "stage-13"
+        worker_dir = stage_dir / "refine_sandbox_v2" / "_docker_project_2"
+        worker_dir.mkdir(parents=True)
+        manual_path = stage_dir / "manual_redesign.json"
+        manual_path.write_text(
+            json.dumps({"active_conditions": ["probe_control"]}),
+            encoding="utf-8",
+        )
+        partial_path = worker_dir / "partial_results.json"
+        partial_path.write_text(
+            json.dumps(
+                {
+                    "status": "partial",
+                    "results": [
+                        {
+                            "condition_name": "probe_control",
+                            "seed": 1,
+                            "primary_metric": 0.42,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        newer = manual_path.stat().st_mtime + 5.0
+        os.utime(partial_path, (newer, newer))
+
+        assert rc_execution_impl._load_stage13_condition_seed_cache(stage_dir) == {
+            "probe_control": {1: 0.42}
+        }
+
+
+    def test_build_stage13_incremental_plan_freezes_unaffected_baselines(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        stage_dir = tmp_path / "stage-13"
+        stage_dir.mkdir(parents=True)
+        results_dir = stage_dir / "refine_sandbox_v1" / "_docker_project_1"
+        results_dir.mkdir(parents=True)
+        (results_dir / "results.json").write_text(
+            json.dumps(
+                {
+                    "metrics": {
+                        "full_finetuning_seed_0": 0.71,
+                        "full_finetuning_seed_1": 0.72,
+                        "full_finetuning_seed_2": 0.73,
+                        "qlora_fixed_seed_0": 0.61,
+                        "qlora_fixed_seed_1": 0.62,
+                        "qlora_fixed_seed_2": 0.63,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        config_text = (
+            'register("full_finetuning", "FullFineTuningCondition", "baseline", False, False, [])\n'
+            'register("qlora_fixed", "QLoRACondition", "baseline", True, False, [])\n'
+            'register("probe_control", "ProbeControlCondition", "proposed", False, True, [])\n'
+            'self.screening_seeds: list[int] = [0, 1, 2]\n'
+            'self.active_condition_names: list[str] = ["full_finetuning", "qlora_fixed", "probe_control"]\n'
+        )
+        best_methods = (
+            "class FullFineTuningCondition:\n    pass\n\n"
+            "class QLoRACondition:\n    pass\n\n"
+            "class ProbeControlCondition:\n    def maybe_update_rank(self):\n        return 1\n"
+        )
+        candidate_methods = (
+            "class FullFineTuningCondition:\n    pass\n\n"
+            "class QLoRACondition:\n    pass\n\n"
+            "class ProbeControlCondition:\n    def maybe_update_rank(self):\n        return 2\n"
+        )
+        plan = rc_execution_impl._build_stage13_incremental_plan(
+            stage_dir=stage_dir,
+            best_files={"config.py": config_text, "methods.py": best_methods, "main.py": "print('ok')\n"},
+            candidate_files={"config.py": config_text, "methods.py": candidate_methods, "main.py": "print('ok')\n"},
+            condition_coverage_hint="",
+        )
+        assert plan["active"] is True
+        assert plan["reason"] == "condition_scoped_refine"
+        assert plan["active_conditions"] == ["probe_control"]
+        assert sorted(plan["frozen_conditions"]) == ["full_finetuning", "qlora_fixed"]
+        assert sorted(plan["resume_registry"].keys()) == ["full_finetuning", "qlora_fixed"]
+
+    def test_build_stage13_incremental_plan_freezes_completed_baselines_on_shared_change(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        stage_dir = tmp_path / "stage-13"
+        stage_dir.mkdir(parents=True)
+        results_dir = stage_dir / "refine_sandbox_v1" / "_docker_project_1"
+        results_dir.mkdir(parents=True)
+        (results_dir / "results.json").write_text(
+            json.dumps(
+                {
+                    "metrics": {
+                        "full_finetuning_seed_0": 0.71,
+                        "full_finetuning_seed_1": 0.72,
+                        "full_finetuning_seed_2": 0.73,
+                        "qlora_fixed_seed_0": 0.61,
+                        "qlora_fixed_seed_1": 0.62,
+                        "qlora_fixed_seed_2": 0.63,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        config_text = (
+            'register("full_finetuning", "FullFineTuningCondition", "baseline", False, False, [])\n'
+            'register("qlora_fixed", "QLoRACondition", "baseline", True, False, [])\n'
+            'register("probe_control", "ProbeControlCondition", "proposed", False, True, [])\n'
+            'register("cheap_proxy_controller", "CheapProxyControlCondition", "ablation", False, False, [])\n'
+            'self.screening_seeds: list[int] = [0, 1, 2]\n'
+            'self.active_condition_names: list[str] = ["full_finetuning", "qlora_fixed", "probe_control", "cheap_proxy_controller"]\n'
+        )
+        best_files = {
+            "config.py": config_text,
+            "main.py": "def main():\n    return 'old'\n",
+            "methods.py": "class ProbeControlCondition:\n    pass\n",
+        }
+        candidate_files = {
+            "config.py": config_text,
+            "main.py": "def main():\n    return 'new'\n",
+            "methods.py": "class ProbeControlCondition:\n    pass\n",
+        }
+        plan = rc_execution_impl._build_stage13_incremental_plan(
+            stage_dir=stage_dir,
+            best_files=best_files,
+            candidate_files=candidate_files,
+            condition_coverage_hint="",
+        )
+        assert plan["active"] is True
+        assert plan["reason"] == "shared_execution_change"
+        assert plan["active_conditions"] == ["probe_control", "cheap_proxy_controller"]
+        assert sorted(plan["frozen_conditions"]) == ["full_finetuning", "qlora_fixed"]
+        assert sorted(plan["resume_registry"].keys()) == ["full_finetuning", "qlora_fixed"]
+
+    def test_build_stage13_method_diagnosis_requires_advantage_redesign(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        exp_dir = stage_dir / "experiment"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        config_text = (
+            'register("full_finetuning", "FullFineTuningCondition", "baseline", False, False, [])\n'
+            'register("qlora_fixed", "QLoRACondition", "baseline", True, False, [])\n'
+            'register("probe_control", "ProbeControlCondition", "proposed", False, True, [])\n'
+            "self.max_steps_screening: int = 60\n"
+            "self.probe_interval: int = 20\n"
+            "self.screening_seeds: list[int] = [0, 1, 2]\n"
+        )
+        (exp_dir / "config.py").write_text(config_text, encoding="utf-8")
+        (exp_dir / "methods.py").write_text(
+            (
+                "def resize_rank_basic():\n    return 1\n\n"
+                "def resize_rank_state_consistent():\n    return 1\n"
+            ),
+            encoding="utf-8",
+        )
+        sandbox_results = stage_dir / "refine_sandbox_v1" / "_docker_project_1"
+        sandbox_results.mkdir(parents=True, exist_ok=True)
+        (sandbox_results / "results.json").write_text(
+            json.dumps(
+                {
+                    "metrics": {
+                        "qlora_fixed_seed_0": 0.61,
+                        "qlora_fixed_seed_1": 0.62,
+                        "qlora_fixed_seed_2": 0.63,
+                        "probe_control_seed_0": 0.72,
+                        "probe_control_seed_1": 0.73,
+                        "probe_control_seed_2": 0.74,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        _write_prior_artifact(
+            run_dir,
+            8,
+            "hypotheses.md",
+            (
+                "Hypothesis: the RSVD controller should reduce peak VRAM and "
+                "wall-clock overhead while preserving quality and rank efficiency."
+            ),
+        )
+        _write_prior_artifact(
+            run_dir,
+            9,
+            "experiment_adequacy_report.json",
+            json.dumps({"verdict": "ready_for_gate", "score": 11}),
+        )
+
+        summary, payload = rc_execution_impl._build_stage13_method_diagnosis(
+            stage_dir=stage_dir,
+            run_dir=run_dir,
+            metric_key="val_loss",
+            metric_direction="minimize",
+            condition_coverage_hint="",
+            config_text=config_text,
+        )
+
+        assert payload["method_redesign_required"] is True
+        assert payload["strongest_baseline"]["condition"] == "qlora_fixed"
+        assert payload["strongest_non_baseline"]["condition"] == "probe_control"
+        assert "too short for adaptive control" in summary
+
+    def test_build_stage13_method_diagnosis_flags_missing_baseline_coverage(
+        self,
+        run_dir: Path,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        exp_dir = stage_dir / "experiment"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        config_text = (
+            'register("lora_fixed", "LoRACondition", "baseline", False, False, [])\n'
+            'register("qlora_fixed", "QLoRACondition", "baseline", False, False, [])\n'
+            'register("probe_control", "ProbeControlCondition", "proposed", False, False, [])\n'
+            "self.max_steps_screening: int = 160\n"
+            "self.probe_interval: int = 20\n"
+            "self.screening_seeds: list[int] = [0, 1, 2]\n"
+            'self.active_condition_names: list[str] = ["lora_fixed", "qlora_fixed", "probe_control"]\n'
+        )
+        (exp_dir / "config.py").write_text(config_text, encoding="utf-8")
+        _write_prior_artifact(
+            run_dir,
+            9,
+            "benchmark_plan.json",
+            json.dumps(
+                {
+                    "selected_baselines": [
+                        {"condition": "lora_fixed"},
+                        {"condition": "lora_fixed_matched_rank"},
+                        {"condition": "dora"},
+                        {"condition": "pissa_init"},
+                        {"condition": "milora_init"},
+                        {"condition": "lora_ga_init"},
+                        {"condition": "sensitivity_lora"},
+                    ],
+                    "stage13_alignment": {
+                        "active_conditions": [
+                            "lora_fixed",
+                            "lora_fixed_matched_rank",
+                            "dora",
+                            "pissa_init",
+                            "milora_init",
+                            "lora_ga_init",
+                            "sensitivity_lora",
+                        ]
+                    },
+                }
+            ),
+        )
+        _write_prior_artifact(
+            run_dir,
+            15,
+            "claims_from_results.md",
+            (
+                "## Missing Evidence\n"
+                "- At minimum: LoRA, QLoRA, AdaLoRA, DoRA, LoRA-FA under matched settings.\n"
+            ),
+        )
+        _write_prior_artifact(
+            run_dir,
+            6,
+            "related_work_map.md",
+            "GRIT\nLoRA-Squeeze\nLoRA-drop\nID-LoRA\nSECURA\nPLoP\n",
+        )
+
+        summary, payload = rc_execution_impl._build_stage13_method_diagnosis(
+            stage_dir=stage_dir,
+            run_dir=run_dir,
+            metric_key="val_loss",
+            metric_direction="minimize",
+            condition_coverage_hint="",
+            config_text=config_text,
+        )
+
+        assert payload["baseline_coverage_gap"] is True
+        assert "lora_fixed_matched_rank" in payload["missing_active_conditions"]
+        assert "dora" in payload["missing_active_conditions"]
+        assert "adalora_like_budget" in payload["missing_registered_conditions"]
+        assert "lora_fa" in payload["missing_registered_conditions"]
+        assert "GRIT" in payload["related_work_comparators"]
+        assert "LoRA-Squeeze" in payload["related_work_comparators"]
+        assert "same-round baseline coverage is incomplete" in summary
+        assert "related-work comparators require explicit coverage or exclusion" in summary
+
+    def test_stage13_completion_gate_accepts_measured_max_iteration_stop(
+        self,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _execution as rc_execution_impl
+
+        gate = rc_execution_impl._build_stage13_completion_gate(
+            {
+                "best_metric": 0.62,
+                "converged": False,
+                "stop_reason": "max_iterations_reached",
+                "iterations": [
+                    {
+                        "metric": 0.62,
+                        "incremental_plan": {
+                            "active_conditions": ["qlora_fixed", "probe_control"],
+                        },
+                        "sandbox": {
+                            "returncode": 0,
+                            "metrics": {
+                                "qlora_fixed_seed_0": 0.61,
+                                "probe_control_seed_0": 0.72,
+                            },
+                        },
+                    }
+                ],
+            }
+        )
+
+        assert gate["ok"] is True
+        assert "non_converged_stop:max_iterations_reached" not in gate["reasons"]
+
+    def test_refine_skips_rerun_when_redesign_required_but_change_is_not_substantive(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys
+
+        stage_dir = run_dir / "stage-13"
+        exp_dir = stage_dir / "experiment"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        (exp_dir / "main.py").write_text(
+            "def main():\n    print('val_loss: 0.9')\n\nif __name__ == '__main__':\n    main()\n",
+            encoding="utf-8",
+        )
+        (exp_dir / "config.py").write_text(
+            (
+                'register("full_finetuning", "FullFineTuningCondition", "baseline", False, False, [])\n'
+                'register("qlora_fixed", "QLoRACondition", "baseline", True, False, [])\n'
+                'register("probe_control", "ProbeControlCondition", "proposed", False, True, [])\n'
+                "self.max_steps_screening: int = 60\n"
+                "self.probe_interval: int = 20\n"
+                "self.screening_seeds: list[int] = [0, 1, 2]\n"
+                'self.active_condition_names: list[str] = ["full_finetuning", "qlora_fixed", "probe_control"]\n'
+            ),
+            encoding="utf-8",
+        )
+        (exp_dir / "methods.py").write_text(
+            (
+                "class ProbeControlCondition:\n"
+                "    def run(self):\n"
+                "        return 'old'\n\n"
+                "def resize_rank_basic():\n"
+                "    return 1\n\n"
+                "def resize_rank_state_consistent():\n"
+                "    return 1\n"
+            ),
+            encoding="utf-8",
+        )
+        sandbox_results = stage_dir / "refine_sandbox_v1" / "_docker_project_1"
+        sandbox_results.mkdir(parents=True, exist_ok=True)
+        (sandbox_results / "results.json").write_text(
+            json.dumps(
+                {
+                    "metrics": {
+                        "full_finetuning_seed_0": 0.71,
+                        "full_finetuning_seed_1": 0.72,
+                        "full_finetuning_seed_2": 0.73,
+                        "qlora_fixed_seed_0": 0.61,
+                        "qlora_fixed_seed_1": 0.62,
+                        "qlora_fixed_seed_2": 0.63,
+                        "probe_control_seed_0": 0.72,
+                        "probe_control_seed_1": 0.73,
+                        "probe_control_seed_2": 0.74,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        _write_prior_artifact(
+            run_dir,
+            8,
+            "hypotheses.md",
+            (
+                "Hypothesis: RSVD control should reduce peak VRAM and wall-clock "
+                "time while preserving quality."
+            ),
+        )
+        _write_prior_artifact(
+            run_dir,
+            9,
+            "experiment_adequacy_report.json",
+            json.dumps({"verdict": "ready_for_gate", "score": 11}),
+        )
+
+        sandbox_data = {
+            "project": {"name": "rc-test", "mode": "docs-first"},
+            "research": {
+                "topic": "test-driven science",
+                "domains": ["ml", "systems"],
+                "daily_paper_count": 2,
+                "quality_threshold": 8.2,
+            },
+            "runtime": {"timezone": "UTC"},
+            "notifications": {
+                "channel": "local",
+                "on_stage_start": True,
+                "on_stage_fail": False,
+                "on_gate_required": True,
+            },
+            "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
+            "openclaw_bridge": {"use_memory": True, "use_message": True},
+            "llm": {
+                "provider": "openai-compatible",
+                "base_url": "http://localhost:1234/v1",
+                "api_key_env": "RC_TEST_KEY",
+                "api_key": "inline-test-key",
+                "primary_model": "fake-model",
+                "fallback_models": [],
+            },
+            "security": {"hitl_required_stages": [5, 9, 20]},
+            "experiment": {
+                "mode": "sandbox",
+                "time_budget_sec": 30,
+                "max_iterations": 1,
+                "metric_key": "val_loss",
+                "metric_direction": "minimize",
+                "sandbox": {
+                    "python_path": sys.executable,
+                    "gpu_required": False,
+                    "max_memory_mb": 1024,
+                },
+            },
+        }
+        sandbox_config = RCConfig.from_dict(
+            sandbox_data,
+            project_root=tmp_path,
+            check_paths=False,
+        )
+        llm = FakeLLMClient(
+            "```json\n"
+            '{"method_change_summary": {"redesign_goal": "runtime cleanup", '
+            '"changed_conditions": [], "advantage_targets": ["quality"], '
+            '"substantive_method_change": false, "expected_effect": "none"}}\n'
+            "```\n"
+            "```filename:main.py\n"
+            "def main():\n    print('val_loss: 0.8')\n\nif __name__ == '__main__':\n    main()\n"
+            "```"
+        )
+
+        def _unexpected_sandbox(*args: object, **kwargs: object):
+            raise AssertionError("sandbox should not run when method gate skips the iteration")
+
+        monkeypatch.setattr(
+            "researchclaw.experiment.factory.create_sandbox",
+            _unexpected_sandbox,
+        )
+
+        rc_executor._execute_iterative_refine(
+            stage_dir,
+            run_dir,
+            sandbox_config,
+            adapters,
+            llm=llm,
+        )
+
+        payload = json.loads(
+            (stage_dir / "refinement_log.json").read_text(encoding="utf-8")
+        )
+        assert payload["stop_reason"] == "cached_results_complete"
+        assert payload["iterations"][0]["cached_completion"] is True
+        assert payload["iterations"][0]["validation_summary"] == "cached_complete"
+        assert not llm.calls
+        assert (stage_dir / "method_diagnosis.json").exists()
 
 
 class TestExportPublishCodePackage:
@@ -1269,6 +2931,32 @@ class TestExportPublishCodePackage:
         readme = (stage_dir / "code" / "README.md").read_text(encoding="utf-8")
         assert "My Great Paper" in readme
 
+    def test_export_publish_context_overflow_uses_revised_paper(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+    ) -> None:
+        revised = "# My Great Paper\n\nSome content..."
+        _write_prior_artifact(run_dir, 19, "paper_revised.md", revised)
+        stage_dir = tmp_path / "run" / "stage-22"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        class ExportOverflowLLM:
+            def chat(self, messages, **kwargs):
+                _ = messages, kwargs
+                raise RuntimeError("Context-overflow message returned instead of Python code.")
+
+        result = rc_executor._execute_export_publish(
+            stage_dir, run_dir, rc_config, adapters, llm=ExportOverflowLLM()
+        )
+
+        assert result.status == StageStatus.DONE
+        final_text = (stage_dir / "paper_final.md").read_text(encoding="utf-8")
+        assert "My Great Paper" in final_text
+        assert "Context-overflow" not in final_text
+
 
 def test_contracts_stage13_includes_experiment_final() -> None:
     assert "experiment_final/" in CONTRACTS[Stage.ITERATIVE_REFINE].output_files
@@ -1341,8 +3029,8 @@ class TestTopicConstraintBlock:
 
 
 class TestParseDecision:
-    def test_proceed_default(self) -> None:
-        assert rc_executor._parse_decision("Some random text") == "proceed"
+    def test_unrecognized_text_is_invalid(self) -> None:
+        assert rc_executor._parse_decision("Some random text") is None
 
     def test_proceed_explicit(self) -> None:
         text = "## Decision\nPROCEED\n## Justification\nGood results."
@@ -1367,6 +3055,20 @@ class TestParseDecision:
     def test_decision_in_body_not_heading(self) -> None:
         text = "The results suggest we should PIVOT to a new approach."
         assert rc_executor._parse_decision(text) == "pivot"
+
+    def test_usage_limit_text_is_invalid(self) -> None:
+        text = "⚠️ You have hit your ChatGPT usage limit (plus plan). Try again in ~142 min."
+        assert rc_executor._parse_decision(text) is None
+
+
+class TestChatWithPrompt:
+    def test_rejects_usage_limit_payload(self) -> None:
+        fake_llm = FakeLLMClient(
+            "⚠️ You have hit your ChatGPT usage limit (plus plan). Try again in ~142 min."
+        )
+
+        with pytest.raises(RuntimeError, match="quota"):
+            _chat_with_prompt(fake_llm, "system", "user")
 
 
 class TestResearchDecisionStructured:
@@ -1401,6 +3103,26 @@ class TestResearchDecisionStructured:
             stage_dir, run_dir, rc_config, adapters, llm=fake_llm
         )
         assert result.decision == "pivot"
+
+    def test_usage_limit_response_fails_stage(
+        self, tmp_path: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-15"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 14, "analysis.md", "# Analysis\nResults ok.")
+        fake_llm = FakeLLMClient(
+            "⚠️ You have hit your ChatGPT usage limit (plus plan). Try again in ~142 min."
+        )
+
+        result = rc_executor._execute_research_decision(
+            stage_dir, run_dir, rc_config, adapters, llm=fake_llm
+        )
+
+        assert result.status == StageStatus.FAILED
+        assert result.decision == "hold"
+        assert "quota" in (result.error or "").lower()
 
     def test_no_llm_defaults_to_proceed(
         self, tmp_path: Path, rc_config: RCConfig, adapters: AdapterBundle
@@ -1441,6 +3163,58 @@ class TestResearchDecisionStructured:
         claims_payload = json.loads((stage_dir / "claims_from_results.json").read_text())
         assert "Method A beats baseline B." in claims_payload["supported_claims"]
         assert len(llm.calls) == 2
+
+    def test_decision_prompts_prioritize_authoritative_experiment_snapshot(
+        self, tmp_path: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-15"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(
+            run_dir,
+            14,
+            "analysis.md",
+            "# Analysis\nStale prose says falcon_qb_activation_rank loses.",
+        )
+        _write_prior_artifact(
+            run_dir,
+            14,
+            "experiment_summary.json",
+            json.dumps(
+                {
+                    "condition_summaries": {
+                        "falcon_qb_activation_rank": {
+                            "metrics": {"primary_metric_mean": 0.189296}
+                        },
+                        "cheap_proxy_controller": {
+                            "metrics": {"primary_metric_mean": 0.192978}
+                        },
+                    }
+                }
+            ),
+        )
+        llm = SequenceLLMClient(
+            [
+                "## Supported Claims\n- Falcon beats cheap proxy.\n\n"
+                "## Partially Supported Claims\n- None.\n\n"
+                "## Unsupported or Rejected Claims\n- None.\n\n"
+                "## Missing Evidence\n- None.\n\n"
+                "## Paper Positioning Guidance\n- Keep it narrow.\n",
+                "## Decision\nPROCEED\n## Justification\nFresh summary wins.\n",
+            ]
+        )
+
+        rc_executor._execute_research_decision(
+            stage_dir, run_dir, rc_config, adapters, llm=llm
+        )
+
+        claims_prompt = llm.calls[0][0]["content"]
+        decision_prompt = llm.calls[1][0]["content"]
+        assert "Authoritative Structured Experiment Snapshot" in claims_prompt
+        assert "falcon_qb_activation_rank: primary_metric_mean=0.189296" in claims_prompt
+        assert "Authoritative Structured Experiment Snapshot" in decision_prompt
+        assert "If prose analysis conflicts with this snapshot, trust this snapshot." in decision_prompt
 
 
 class TestProblemAnchorAndClaimMatrix:
@@ -1500,6 +3274,10 @@ class TestProblemAnchorAndClaimMatrix:
         assert "latent_update_net" in matrix_text
         matrix_payload = json.loads((stage_dir / "claims_evidence_matrix.json").read_text())
         assert matrix_payload["claims"][0]["proposed_methods"] == ["latent_update_net"]
+        adequacy_report = json.loads((stage_dir / "experiment_adequacy_report.json").read_text())
+        assert adequacy_report["verdict"] in {"ready_for_gate", "borderline_review_needed", "weak_design"}
+        assert "experiment_adequacy_report.md" in result.artifacts
+        assert result.control_hints["adequacy_verdict"] == adequacy_report["verdict"]
 
 
 class TestAutoReviewLoopLite:
@@ -1576,6 +3354,73 @@ class TestAutoReviewLoopLite:
         updated_state = json.loads((stage_dir / "review_state.json").read_text(encoding="utf-8"))
         assert updated_state["status"] == "revised_pending_re_review"
         assert (run_dir / "REVIEW_STATE.json").exists()
+
+    def test_paper_revision_context_overflow_retries_with_compact_prompt(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        _write_prior_artifact(run_dir, 17, "paper_draft.md", "# Draft\n\n" + ("A" * 50000))
+        _write_prior_artifact(run_dir, 18, "reviews.md", "# Reviews\n- Tighten results.")
+        _write_prior_artifact(
+            run_dir,
+            18,
+            "review_state.json",
+            json.dumps({"iteration": 1, "status": "reviewed_pending_revision", "overall_score": 6.0}),
+        )
+        stage_dir = run_dir / "stage-19"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        class RevisionOverflowOnceLLM:
+            def __init__(self):
+                self.user_prompts: list[str] = []
+
+            def chat(self, messages, **kwargs):
+                _ = kwargs
+                user = next(m["content"] for m in messages if m.get("role") == "user")
+                self.user_prompts.append(user)
+                if "... [paper draft compacted:" not in user:
+                    raise RuntimeError("Context-overflow message returned instead of Python code.")
+                from researchclaw.llm.client import LLMResponse
+                return LLMResponse(content="# Revised\n\nTightened revision.", model="fake")
+
+        llm = RevisionOverflowOnceLLM()
+
+        result = rc_executor._execute_paper_revision(
+            stage_dir, run_dir, rc_config, adapters, llm=llm
+        )
+
+        assert result.status == StageStatus.DONE
+        assert any("... [paper draft compacted:" in p for p in llm.user_prompts)
+        revised = (stage_dir / "paper_revised.md").read_text(encoding="utf-8")
+        assert "Tightened revision" in revised
+        assert "Context-overflow" not in revised
+
+    def test_paper_revision_preserves_original_if_compact_overflows(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        original = "# Draft\n\nOriginal text."
+        _write_prior_artifact(run_dir, 17, "paper_draft.md", original)
+        _write_prior_artifact(run_dir, 18, "reviews.md", "# Reviews\n- Tighten results.")
+        _write_prior_artifact(
+            run_dir,
+            18,
+            "review_state.json",
+            json.dumps({"iteration": 1, "status": "reviewed_pending_revision", "overall_score": 6.0}),
+        )
+        stage_dir = run_dir / "stage-19"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        class AlwaysRevisionOverflowLLM:
+            def chat(self, messages, **kwargs):
+                _ = messages, kwargs
+                raise RuntimeError("Context-overflow message returned instead of Python code.")
+
+        result = rc_executor._execute_paper_revision(
+            stage_dir, run_dir, rc_config, adapters, llm=AlwaysRevisionOverflowLLM()
+        )
+
+        assert result.status == StageStatus.DONE
+        assert (stage_dir / "paper_revised.md").read_text(encoding="utf-8") == original
+        assert (stage_dir / "revision_notes_internal.md").exists()
 
     def test_peer_review_prefers_latest_revised_paper(
         self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
@@ -1662,6 +3507,131 @@ class TestAutoReviewLoopLite:
 
         assert result.status == StageStatus.DONE
         assert result.decision == "editorial_experiment_refine"
+
+    def test_quality_gate_context_overflow_retries_with_compact_prompt(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        _write_prior_artifact(run_dir, 19, "paper_revised.md", "# Revised\n\n" + ("A" * 50000))
+        _write_prior_artifact(
+            run_dir,
+            14,
+            "experiment_summary.json",
+            json.dumps({
+                "metrics_summary": {"primary_metric": {"mean": 0.5, "min": 0.5, "max": 0.5}},
+                "condition_summaries": {"method": {"primary_metric_mean": 0.5}},
+            }),
+        )
+        stage_dir = run_dir / "stage-20"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        class QualityOverflowOnceLLM:
+            def __init__(self):
+                self.user_prompts: list[str] = []
+
+            def chat(self, messages, **kwargs):
+                _ = kwargs
+                user = next(m["content"] for m in messages if m.get("role") == "user")
+                self.user_prompts.append(user)
+                if "... [paper for evaluation compacted:" not in user:
+                    raise RuntimeError("Context-overflow message returned instead of Python code.")
+                from researchclaw.llm.client import LLMResponse
+                return LLMResponse(
+                    content=json.dumps({
+                        "score_1_to_10": 9,
+                        "verdict": "proceed",
+                        "strengths": ["compact review succeeded"],
+                        "weaknesses": [],
+                    }),
+                    model="fake",
+                )
+
+        llm = QualityOverflowOnceLLM()
+
+        result = rc_executor._execute_quality_gate(
+            stage_dir, run_dir, rc_config, adapters, llm=llm
+        )
+
+        assert result.status == StageStatus.DONE
+        assert any("... [paper for evaluation compacted:" in p for p in llm.user_prompts)
+        report = json.loads((stage_dir / "quality_report.json").read_text(encoding="utf-8"))
+        assert report["score_1_to_10"] == 9
+
+    def test_quality_gate_compact_overflow_uses_default_report(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        _write_prior_artifact(run_dir, 19, "paper_revised.md", "# Revised\n\n" + ("A" * 50000))
+        _write_prior_artifact(
+            run_dir,
+            18,
+            "review_state.json",
+            json.dumps({
+                "iteration": 1,
+                "overall_score": 5.0,
+                "target_score": 8.0,
+                "max_review_rounds": 4,
+                "open_findings": 3,
+                "review_outcome": "revise_again",
+                "editorial_action": "rework_innovation",
+            }),
+        )
+        stage_dir = run_dir / "stage-20"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        class AlwaysQualityOverflowLLM:
+            def chat(self, messages, **kwargs):
+                _ = messages, kwargs
+                raise RuntimeError("Context-overflow message returned instead of Python code.")
+
+        result = rc_executor._execute_quality_gate(
+            stage_dir, run_dir, rc_config, adapters, llm=AlwaysQualityOverflowLLM()
+        )
+
+        assert result.status == StageStatus.DONE
+        assert result.decision == "degraded"
+        report = json.loads((stage_dir / "quality_report.json").read_text(encoding="utf-8"))
+        assert report["_assessment_unavailable"] is True
+        assert any("compact retry" in w for w in report.get("weaknesses", []))
+
+    def test_quality_gate_quota_error_uses_default_report(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        _write_prior_artifact(run_dir, 19, "paper_revised.md", "# Revised\n\nBody.")
+        stage_dir = run_dir / "stage-20"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        class QualityQuotaLLM:
+            def chat(self, messages, **kwargs):
+                _ = messages, kwargs
+                raise RuntimeError("Upstream quota message returned instead of Python code.")
+
+        result = rc_executor._execute_quality_gate(
+            stage_dir, run_dir, rc_config, adapters, llm=QualityQuotaLLM()
+        )
+
+        assert result.status == StageStatus.DONE
+        report = json.loads((stage_dir / "quality_report.json").read_text(encoding="utf-8"))
+        assert any("quota" in w.lower() for w in report.get("weaknesses", []))
+
+    def test_knowledge_archive_context_overflow_writes_deterministic_archive(
+        self, run_dir: Path, rc_config: RCConfig, adapters: AdapterBundle
+    ) -> None:
+        _write_prior_artifact(run_dir, 19, "paper_revised.md", "# Revised\n\n" + ("A" * 50000))
+        stage_dir = run_dir / "stage-21"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        class ArchiveOverflowLLM:
+            def chat(self, messages, **kwargs):
+                _ = messages, kwargs
+                raise RuntimeError("Context-overflow message returned instead of Python code.")
+
+        result = rc_executor._execute_knowledge_archive(
+            stage_dir, run_dir, rc_config, adapters, llm=ArchiveOverflowLLM()
+        )
+
+        assert result.status == StageStatus.DONE
+        archive = (stage_dir / "archive.md").read_text(encoding="utf-8")
+        assert "deterministic" not in archive.lower()
+        assert "LLM context overflow" in archive
 
 
 class TestPhaseThreeCompactArtifacts:
@@ -1995,6 +3965,60 @@ class TestResultAnalysisDebate:
         assert "analysis.md" in result.artifacts
         assert not (stage_dir / "perspectives").exists()
 
+    def test_result_analysis_prepends_authoritative_snapshot(
+        self, tmp_path: Path, rc_config: RCConfig, adapters: AdapterBundle, monkeypatch
+    ) -> None:
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-14"
+        stage_dir.mkdir(parents=True)
+        monkeypatch.setattr(
+            rc_analysis,
+            "_collect_experiment_results",
+            lambda *args, **kwargs: {
+                "metrics_summary": {},
+                "runs": [],
+                "best_run": {
+                    "metrics": {
+                        "falcon_qb_activation_rank/primary_metric": 0.189296,
+                        "cheap_proxy_controller/primary_metric": 0.192978,
+                    }
+                },
+                "latex_table": "",
+                "structured_results": {},
+            },
+        )
+
+        rc_executor._execute_result_analysis(
+            stage_dir, run_dir, rc_config, adapters, llm=None
+        )
+
+        analysis = (stage_dir / "analysis.md").read_text()
+        assert "## Authoritative Structured Experiment Snapshot" in analysis
+        assert "falcon_qb_activation_rank: primary_metric=0.189296" in analysis
+        assert "cheap_proxy_controller: primary_metric=0.192978" in analysis
+
+
+class TestAuthoritativeExperimentSnapshot:
+    def test_builds_ranked_snapshot_from_condition_summaries(self) -> None:
+        snapshot = rc_analysis._build_authoritative_experiment_snapshot(
+            {
+                "condition_summaries": {
+                    "cheap_proxy_controller": {
+                        "metrics": {"primary_metric_mean": 0.192978}
+                    },
+                    "falcon_qb_activation_rank": {
+                        "metrics": {"primary_metric_mean": 0.189296}
+                    },
+                }
+            },
+            metric_key="primary_metric",
+            metric_direction="minimize",
+        )
+
+        assert "Authoritative Structured Experiment Snapshot" in snapshot
+        assert snapshot.index("falcon_qb_activation_rank") < snapshot.index("cheap_proxy_controller")
+
 
 class TestParseMetricsFromStdout:
     """Tests for _parse_metrics_from_stdout() helper."""
@@ -2117,6 +4141,14 @@ class TestDetectRuntimeIssues:
     def test_ignores_benign_stderr(self) -> None:
         # Non-warning stderr should be ignored
         r = self._make_sandbox_result(stderr="Loading module...\nDone.\n")
+        assert rc_executor._detect_runtime_issues(r) == ""
+
+    def test_ignores_hf_hub_unauthenticated_warning(self) -> None:
+        stderr = (
+            "Warning: You are sending unauthenticated requests to the HF Hub. "
+            "Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n"
+        )
+        r = self._make_sandbox_result(stderr=stderr)
         assert rc_executor._detect_runtime_issues(r) == ""
 
     def test_combined_nan_and_stderr(self) -> None:
@@ -2382,6 +4414,76 @@ class TestWritePaperSections:
         assert "sections written so far" in llm.user_prompts[1]
         assert "completing a paper" in llm.user_prompts[2]
 
+    def test_part2_context_overflow_retries_with_compact_prompt(self) -> None:
+        class OverflowOnceLLM:
+            def __init__(self):
+                self.user_prompts: list[str] = []
+                self.full_part2_failures = 0
+
+            def chat(self, messages, **kwargs):
+                _ = kwargs
+                user = next(m["content"] for m in messages if m.get("role") == "user")
+                self.user_prompts.append(user)
+                if "Now write the next sections" in user and "... [preamble compacted:" not in user:
+                    self.full_part2_failures += 1
+                    raise RuntimeError("Context-overflow message returned instead of Python code.")
+                from researchclaw.llm.client import LLMResponse
+                if "Now write the next sections" in user:
+                    return LLMResponse(
+                        content="## Method\nCompact method.\n\n## Experiments\nCompact experiments.",
+                        model="fake",
+                    )
+                if "Now write the final sections" in user:
+                    return LLMResponse(
+                        content="## Results\nResults.\n\n## Discussion\nDiscussion.\n\n"
+                        "## Limitations\nLimits.\n\n## Conclusion\nConclusion.",
+                        model="fake",
+                    )
+                return LLMResponse(
+                    content="## Title\nT\n\n## Abstract\nA\n\n## Introduction\nI\n\n## Related Work\nR",
+                    model="fake",
+                )
+
+        llm = OverflowOnceLLM()
+        from researchclaw.prompts import PromptManager
+        pm = PromptManager()
+
+        draft = rc_executor._write_paper_sections(
+            llm=llm,
+            pm=pm,
+            preamble="Preamble\n" + ("A" * 20000),
+            topic_constraint="",
+            exp_metrics_instruction="Metrics\n" + ("B" * 30000),
+            citation_instruction="Citations\n" + ("C" * 18000),
+            outline="Outline\n" + ("D" * 12000),
+        )
+
+        assert llm.full_part2_failures == 2
+        assert any("... [preamble compacted:" in p for p in llm.user_prompts)
+        assert "## Method" in draft
+        assert "Compact method" in draft
+        assert "PLACEHOLDER" not in draft
+
+    def test_part2_context_overflow_failure_raises_instead_of_placeholder(self) -> None:
+        class AlwaysOverflowLLM:
+            def chat(self, messages, **kwargs):
+                _ = messages, kwargs
+                raise RuntimeError("Context-overflow message returned instead of Python code.")
+
+        from researchclaw.prompts import PromptManager
+        pm = PromptManager()
+
+        with pytest.raises(RuntimeError, match="failed after compact retry"):
+            rc_executor._write_paper_sections(
+                llm=AlwaysOverflowLLM(),
+                pm=pm,
+                preamble="Preamble",
+                topic_constraint="",
+                exp_metrics_instruction="Metrics",
+                citation_instruction="Citations",
+                outline="Outline",
+            )
+
 
 class TestLoadHardwareProfile:
     """Tests for _load_hardware_profile()."""
@@ -2531,9 +4633,10 @@ class TestPartialTimeoutStatus:
     """Test partial status for timed-out experiments with data (R4-1c)."""
 
     def test_timed_out_with_metrics_sets_partial_status(
-        self, tmp_path: Path, run_dir: Path, adapters: AdapterBundle
+        self, tmp_path: Path, run_dir: Path, adapters: AdapterBundle, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import sys
+        from researchclaw.pipeline.stage_impls import _execution as execution_impl
 
         data = {
             "project": {"name": "rc-test", "mode": "docs-first"},
@@ -2574,6 +4677,19 @@ class TestPartialTimeoutStatus:
             },
         }
         cfg = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+        monkeypatch.setattr(
+            execution_impl,
+            "_query_stage12_gpu_inventory",
+            lambda: [
+                {
+                    "index": 4,
+                    "utilization": 0,
+                    "memory_used_mb": 128,
+                    "memory_total_mb": 16384,
+                    "compute_apps": [],
+                }
+            ],
+        )
 
         # Write experiment code that prints some metrics then sleeps
         exp_dir = run_dir / "stage-11" / "experiment"
@@ -2604,6 +4720,93 @@ class TestPartialTimeoutStatus:
         else:
             # Subprocess stdout may not flush before kill on some platforms
             assert payload["status"] == "failed"
+        observer = json.loads((stage_dir / "runtime_observer.json").read_text(encoding="utf-8"))
+        assert observer["runtime_outcome"]["status"] in {"partial", "failed"}
+        assert observer["preflight"]["ok"] is True
+        assert observer["gpu_availability"]["status"] == "ready"
+        assert observer["runtime_watchdog"]["status"] in {"timed_out", "healthy"}
+
+    def test_stage12_preflight_failure_writes_runtime_observer(
+        self, tmp_path: Path, run_dir: Path, adapters: AdapterBundle, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sys
+        from researchclaw.pipeline.stage_impls import _execution as execution_impl
+
+        data = {
+            "project": {"name": "rc-test", "mode": "docs-first"},
+            "research": {"topic": "test topic", "domains": ["ml"]},
+            "runtime": {"timezone": "UTC"},
+            "notifications": {"channel": "local"},
+            "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
+            "openclaw_bridge": {"use_memory": False, "use_message": False},
+            "llm": {
+                "provider": "openai-compatible",
+                "base_url": "http://localhost:1234/v1",
+                "api_key_env": "RC_TEST_KEY",
+                "api_key": "inline-test-key",
+                "primary_model": "fake-model",
+            },
+            "experiment": {
+                "mode": "sandbox",
+                "time_budget_sec": 60,
+                "metric_key": "best_loss",
+                "metric_direction": "minimize",
+                "sandbox": {
+                    "python_path": sys.executable,
+                    "gpu_required": False,
+                },
+            },
+        }
+        cfg = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+        monkeypatch.setattr(
+            execution_impl,
+            "_query_stage12_gpu_inventory",
+            lambda: [
+                {
+                    "index": 4,
+                    "utilization": 0,
+                    "memory_used_mb": 256,
+                    "memory_total_mb": 16384,
+                    "compute_apps": [],
+                },
+                {
+                    "index": 5,
+                    "utilization": 92,
+                    "memory_used_mb": 12000,
+                    "memory_total_mb": 16384,
+                    "compute_apps": [{"pid": 123, "process_name": "python"}],
+                },
+            ],
+        )
+
+        exp_dir = run_dir / "stage-10" / "experiment"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        (exp_dir / "main.py").write_text(
+            "from datasets import load_dataset\nload_dataset('json', data_files='dummy.jsonl')\nprint('hello')\n",
+            encoding="utf-8",
+        )
+        stage11_dir = run_dir / "stage-11"
+        stage11_dir.mkdir(parents=True, exist_ok=True)
+        (stage11_dir / "schedule.json").write_text(
+            json.dumps({"execution_strategy": "single_gpu_serial", "gpu_wait_policy": "wait_for_idle_gpu_0_6", "total_gpu_budget": 1}),
+            encoding="utf-8",
+        )
+
+        stage_dir = run_dir / "stage-12"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        result = rc_executor._execute_experiment_run(stage_dir, run_dir, cfg, adapters)
+
+        assert result.status == StageStatus.FAILED
+        observer = json.loads((stage_dir / "runtime_observer.json").read_text(encoding="utf-8"))
+        assert observer["status"] == "failed"
+        assert observer["preflight"]["ok"] is False
+        assert observer["preflight"]["errors"]
+        assert observer["runtime_outcome"]["failure_type"] in {"dataset_prep", "config_mismatch"}
+        assert observer["dataset_readiness"]["status"] == "blocked"
+        assert observer["dataset_readiness"]["uses_huggingface_datasets"] is True
+        assert observer["gpu_availability"]["status"] == "ready"
+        assert observer["gpu_availability"]["idle_gpu_ids"] == [4]
+        assert observer["runtime_watchdog"]["status"] == "failed"
 
 
 class TestTimeoutAwareRefine:
@@ -2688,6 +4891,79 @@ class TestTimeoutAwareRefine:
         user_msg = llm.calls[0][-1]["content"]
         assert "TIMED OUT" in user_msg
         assert "120" in user_msg
+
+    def test_refine_uses_structured_diagnostic_bundle(
+        self, tmp_path: Path, run_dir: Path, adapters: AdapterBundle
+    ) -> None:
+        self._prepare_timed_out_run(run_dir)
+        stage12_dir = run_dir / "stage-12"
+        (stage12_dir / "runtime_observer.json").write_text(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "resource_plan": {
+                        "execution_strategy": "single_gpu_serial",
+                        "gpu_wait_policy": "wait_for_idle_gpu_0_6",
+                    },
+                    "preflight": {"ok": True, "errors": [], "warnings": []},
+                    "runtime_outcome": {
+                        "status": "failed",
+                        "failure_type": "dataset_prep",
+                        "retryable": True,
+                        "timed_out": True,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        _write_prior_artifact(
+            run_dir,
+            11,
+            "exp_plan.yaml",
+            "conditions:\n  - baseline\n  - proposed\n",
+        )
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+
+        data = {
+            "project": {"name": "rc-test", "mode": "docs-first"},
+            "research": {"topic": "test topic", "domains": ["ml"]},
+            "runtime": {"timezone": "UTC"},
+            "notifications": {"channel": "local"},
+            "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
+            "openclaw_bridge": {"use_memory": False, "use_message": False},
+            "llm": {
+                "provider": "openai-compatible",
+                "base_url": "http://localhost:1234/v1",
+                "api_key_env": "RC_TEST_KEY",
+                "api_key": "inline-test-key",
+                "primary_model": "fake-model",
+            },
+            "experiment": {
+                "mode": "sandbox",
+                "time_budget_sec": 120,
+                "max_iterations": 1,
+                "metric_key": "best_loss",
+                "metric_direction": "minimize",
+            },
+        }
+        cfg = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+        llm = FakeLLMClient("```python\nprint('best_loss: 0.1')\n```")
+
+        result = rc_executor._execute_iterative_refine(
+            stage_dir, run_dir, cfg, adapters, llm=llm
+        )
+
+        bundle = json.loads(
+            (stage_dir / "refine_diagnostic_bundle.json").read_text(encoding="utf-8")
+        )
+        assert bundle["aggregates"]["dominant_failure_types"] == ["dataset_prep"]
+        assert bundle["aggregates"]["dataset_observer_status"] == ""
+        assert bundle["aggregates"]["gpu_observer_status"] == ""
+        assert bundle["aggregates"]["watchdog_status"] == ""
+        assert bundle["runtime_observer"]["runtime_outcome"]["retryable"] is True
+        assert "refine_diagnostic_bundle.json" in result.artifacts
+        assert "Dominant failure types: dataset_prep" in llm.calls[0][-1]["content"]
 
 
 # ── R4-2: Data Integrity Enforcement Tests ───────────────────────────
@@ -3016,10 +5292,10 @@ class TestExperimentHarness:
         from researchclaw.experiment.harness_template import ExperimentHarness
 
         h = ExperimentHarness(time_budget=1)
-        assert not h.should_stop()  # Just created, not at 80% yet
+        assert not h.should_stop()
         import time
         time.sleep(0.9)
-        assert h.should_stop()  # Should be past 80% of 1s
+        assert not h.should_stop()
 
     def test_harness_report_metric(self, capsys: pytest.CaptureFixture[str]) -> None:
         from researchclaw.experiment.harness_template import ExperimentHarness
@@ -3057,9 +5333,13 @@ class TestExperimentHarness:
             h.report_metric("accuracy", 0.95)
             h.report_metric("loss", 0.05)
             h.log_result({"condition": "A", "value": 1.0})
+            partial = json.loads((tmp_path / "partial_results.json").read_text(encoding="utf-8"))
+            assert partial["status"] == "partial"
+            assert partial["completed_seed_count"] == 1
             h.finalize()
 
             results = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+            assert results["status"] == "completed"
             assert results["metrics"]["accuracy"] == 0.95
             assert results["metrics"]["loss"] == 0.05
             assert len(results["results"]) == 1
@@ -3455,6 +5735,46 @@ class TestConsecutiveEmptyMetrics:
 
         # No stage-14_v1 exists
         assert _consecutive_empty_metrics(run_dir, pivot_count=1) is False
+
+    def test_low_yield_refine_is_not_applied_to_new_falcon_activation_target(
+        self, tmp_path: Path
+    ) -> None:
+        from researchclaw.pipeline.runner import _recent_low_yield_refine
+
+        run_dir = tmp_path / "run"
+        for dirname, metric in [
+            ("stage-14_v3", 0.1900),
+            ("stage-14_v4", 0.1901),
+            ("stage-14", 0.1902),
+        ]:
+            stage_dir = run_dir / dirname
+            stage_dir.mkdir(parents=True)
+            (stage_dir / "experiment_summary.json").write_text(
+                json.dumps(
+                    {
+                        "metric_key": "primary_metric",
+                        "metrics_summary": {"primary_metric": {"mean": metric}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+        stage15_dir = run_dir / "stage-15"
+        stage15_dir.mkdir(parents=True)
+        (stage15_dir / "decision_structured.json").write_text(
+            json.dumps({"decision": "refine"}),
+            encoding="utf-8",
+        )
+        (stage15_dir / "phase2_handoff.md").write_text(
+            (
+                "**REFINE**\n\n"
+                "New target override: use `falcon_qb_activation_rank` as the "
+                "primary practical method and run strict H1 matched-budget "
+                "factorization experiments."
+            ),
+            encoding="utf-8",
+        )
+
+        assert _recent_low_yield_refine(run_dir) == (False, "")
 
 
 # ===================================================================

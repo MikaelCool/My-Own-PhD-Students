@@ -71,6 +71,16 @@
 - **描述**: Case 1 出现 `P6: Degenerate refine cycle detected, injecting PROCEED hint`。Pipeline 检测到实验迭代循环没有实质进展，自动注入 PROCEED 跳出。
 - **远程修复**: 根因是 LLM 在迭代 refine 时重命名/替换 condition 名称导致漂移。修复方案：在 `iterative_improve` prompt 中注入 `exp_plan.yaml` 锚定，并禁止改名条件。
 
+### BUG-11: Stage 16/17 paper-writing 旧失败聚集
+- **状态**: ⏳ 已登记，后续单独修复
+- **描述**: 当前分支 `tests/test_rc_executor.py` 全量失败里，仍有一批集中在 Stage 16/17 论文写作链路与相关契约的问题，包括：
+  - `_write_paper_sections()` 对 `run_dir=None` 的兼容性不足
+  - `paper_draft` 数据完整性阻断与测试契约不一致
+  - `paper_outline / paper_draft` prompt 注入路径存在回归
+  - Stage 17 阻断时产物落盘行为与测试预期不一致
+- **影响**: 拖慢全量 executor 回归，且会掩盖 Phase 2 对 Stage 9-13 的真实问题
+- **处理策略**: 不在本轮 Phase 2（Stage 9-13）改动中混修，单独开一轮 `paper-writing stabilization` 修复
+
 ## 远程额外修复（BUG_TRACKER 未记录的问题）
 
 ### RFix-01: Baselines dict→list 转换 (commit `855c201`)
@@ -93,6 +103,7 @@
 | Bug | 优先级 | 状态 |
 |-----|--------|------|
 | BUG-02 gpt-5.4 限流 | 低 | ⏳ 待观察 (外部限制) |
+| BUG-11 Stage 16/17 paper-writing 旧失败 | 高 | ⏳ 已登记，待单独修复 |
 
 所有代码层面的 bug 已修复。
 

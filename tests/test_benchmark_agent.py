@@ -601,6 +601,20 @@ class TestBaseAgent:
         result = BaseAgent._parse_json("no json here at all")
         assert result is None
 
+    def test_chat_rejects_upstream_usage_limit_text(self) -> None:
+        from researchclaw.agents.base import BaseAgent
+
+        llm = FakeLLM(
+            [
+                "⚠️ You have hit your ChatGPT usage limit "
+                "(plus plan). Try again in ~142 min."
+            ]
+        )
+        agent = BaseAgent(llm)
+
+        with pytest.raises(RuntimeError, match="quota"):
+            agent._chat("system", "user")
+
 
 # ---------------------------------------------------------------------------
 # Required baselines injection (Improvement E)

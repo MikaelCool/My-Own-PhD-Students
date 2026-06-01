@@ -147,9 +147,11 @@ stages:
     system: You extract high-signal evidence cards from papers.
     user: 'Extract structured knowledge cards from shortlist.
 
-      Return JSON: {cards:[{card_id,title,cite_key,problem,method,data,metrics,findings,limitations,citation}]}.
+      Return JSON: {cards:[{card_id,title,cite_key,problem,method,data,metrics,findings,limitations,citation,relation_to_topic,baseline_role,gap_signal}]}.
 
       IMPORTANT: If the input contains cite_key fields, preserve them exactly in the output.
+      Build cards that support a serious related-work section, not a flat summary list.
+      Cover at least 12 papers when enough shortlist items are available.
 
       Shortlist:
 
@@ -159,9 +161,15 @@ stages:
     system: You are a literature mining assistant.
     user: 'Generate candidate papers from the search plan.
 
-      Return JSON: {candidates:[...]} with >=20 rows.
+      Return JSON: {candidates:[...]} with >=50 rows when search evidence allows.
 
       Each candidate must include id,title,source,url,year,abstract,collected_at.
+      Prioritize comprehensive coverage across:
+      - arXiv / OpenAlex / Semantic Scholar
+      - Google Scholar
+      - IEEE Xplore
+      - ACM Digital Library
+      - DBLP / Crossref / institutional indexes such as EI when relevant
 
       Topic: {topic}
 
@@ -174,6 +182,7 @@ stages:
     user: 'Perform merged relevance+quality screening and return shortlist.
 
       Return JSON: {shortlist:[...]} each with title, cite_key (if present), relevance_score (0-1), quality_score (0-1), keep_reason.
+      Target 25-40 retained papers when possible. Preserve source diversity instead of keeping only one venue family.
 
       Preserve all original fields (paper_id, doi, arxiv_id, cite_key, etc.) from the input.
 
@@ -485,6 +494,8 @@ stages:
       search_plan_yaml must be valid YAML text with search_strategies containing at least 3 strategies,
       each with 3-5 diverse keyword queries (short, 3-6 words each). Generate at least 8 total queries.
       Cover: core topic, related methods, benchmarks/datasets, theoretical foundations, applications.
+      Explicitly include search routes for arXiv, OpenAlex, Semantic Scholar, Google Scholar, IEEE Xplore, ACM DL, DBLP/Crossref, and institutional indexes when relevant.
+      Include at least one strategy for seminal/foundational papers and one strategy for very recent work.
 
       sources must include id,name,type,url,status,query,verified_at.
 

@@ -14,7 +14,14 @@ from researchclaw.config import RCConfig
 from researchclaw.evolution import EvolutionStore, extract_lessons
 from researchclaw.knowledge.base import write_stage_to_kb
 from researchclaw.pipeline.executor import StageResult, execute_stage
+from researchclaw.pipeline.control_state import (
+    append_run_index_event as _append_control_run_index_event,
+    append_supervisor_event,
+    stage_observer_snapshot,
+    write_control_state,
+)
 from researchclaw.pipeline.stages import (
+    ControlAction,
     DECISION_ROLLBACK,
     MAX_DECISION_PIVOTS,
     NONCRITICAL_STAGES,
@@ -23,11 +30,156 @@ from researchclaw.pipeline.stages import (
     StageStatus,
 )
 
+_STOP_REQUEST_FILENAME = "STOP_REQUESTED.json"
+_RUN_INDEX_FILENAME = "run_index.json"
+MAX_REFINE_DECISIONS = 8
+MAX_PIVOT_DECISIONS = 2
+
 
 def _utcnow_iso() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
+    fd, tmp_path = tempfile.mkstemp(
+        dir=path.parent,
+        suffix=".tmp",
+        prefix=f"{path.stem}_",
+    )
+    os.close(fd)
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, indent=2, ensure_ascii=False))
+        Path(tmp_path).replace(path)
+    except BaseException:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
+
+
+def stop_request_path(run_dir: Path) -> Path:
+    return run_dir / _STOP_REQUEST_FILENAME
+
+
+def _run_index_path(run_dir: Path) -> Path:
+    return run_dir / _RUN_INDEX_FILENAME
+
+
+def stop_requested(run_dir: Path) -> bool:
+    return stop_request_path(run_dir).exists()
+
+
+def clear_stop_request(run_dir: Path) -> None:
+    stop_request_path(run_dir).unlink(missing_ok=True)
+
+
+def _append_run_index_event(
+    run_dir: Path,
+    *,
+    event: str,
+    payload: dict[str, object] | None = None,
+) -> None:
+    _append_control_run_index_event(
+        run_dir,
+        event=event,
+        payload=dict(payload or {}),
+    )
+
+
+def _mark_checkpoint_stopped(
+    run_dir: Path,
+    *,
+    reason: str,
+    stage: Stage | None = None,
+    run_id: str | None = None,
+) -> None:
+    target = run_dir / "checkpoint.json"
+    checkpoint: dict[str, object] = {}
+    if target.exists():
+        try:
+            loaded = json.loads(target.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                checkpoint = loaded
+        except (json.JSONDecodeError, OSError):
+            checkpoint = {}
+    if stage is not None:
+        checkpoint["stage"] = int(stage)
+        checkpoint["stage_name"] = stage.name
+    if run_id:
+        checkpoint["run_id"] = run_id
+    checkpoint["status"] = "stopped"
+    checkpoint["stop_reason"] = reason
+    checkpoint["timestamp"] = _utcnow_iso()
+    _atomic_write_json(target, checkpoint)
+
+
+def request_stop(run_dir: Path, *, reason: str = "Stopped from web workspace.") -> None:
+    _atomic_write_json(
+        stop_request_path(run_dir),
+        {
+            "status": "stopped",
+            "reason": reason,
+            "timestamp": _utcnow_iso(),
+        },
+    )
+    _mark_checkpoint_stopped(run_dir, reason=reason)
+    _append_run_index_event(run_dir, event="stop_requested", payload={"reason": reason})
+    write_control_state(
+        run_dir,
+        overall_status="stopped",
+        current_action=ControlAction.TERMINATE_RUN.value,
+        waiting_reason=reason,
+        observers=stage_observer_snapshot(
+            run_dir,
+            current_action=ControlAction.TERMINATE_RUN,
+            status="stopped",
+            substep="stop_requested",
+            waiting_reason=reason,
+        ),
+    )
+
+
+def _maybe_stop_pipeline(
+    run_dir: Path,
+    *,
+    run_id: str,
+    stage: Stage | None = None,
+) -> bool:
+    if not stop_requested(run_dir):
+        return False
+    reason = "Pipeline stop requested."
+    try:
+        payload = json.loads(stop_request_path(run_dir).read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            reason = str(payload.get("reason") or reason)
+    except (json.JSONDecodeError, OSError):
+        pass
+    _mark_checkpoint_stopped(run_dir, reason=reason, stage=stage, run_id=run_id)
+    _append_run_index_event(
+        run_dir,
+        event="stop_acknowledged",
+        payload={"run_id": run_id, "stage": int(stage) if stage else None},
+    )
+    write_control_state(
+        run_dir,
+        run_id=run_id,
+        current_stage=int(stage) if stage is not None else None,
+        current_stage_name=stage.name if stage is not None else "",
+        overall_status="stopped",
+        current_action=ControlAction.TERMINATE_RUN.value,
+        waiting_reason=reason,
+        observers=stage_observer_snapshot(
+            run_dir,
+            stage=stage,
+            run_id=run_id,
+            current_action=ControlAction.TERMINATE_RUN,
+            status="stopped",
+            substep="stop_acknowledged",
+            waiting_reason=reason,
+        ),
+    )
+    return True
 
 
 def _should_start(stage: Stage, from_stage: Stage, started: bool) -> bool:
@@ -114,15 +266,54 @@ def _write_checkpoint(run_dir: Path, stage: Stage, run_id: str) -> None:
         "timestamp": _utcnow_iso(),
     }
     target = run_dir / "checkpoint.json"
-    fd, tmp_path = tempfile.mkstemp(dir=run_dir, suffix=".tmp", prefix="checkpoint_")
-    os.close(fd)
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(checkpoint, indent=2))
-        Path(tmp_path).replace(target)
-    except BaseException:
-        Path(tmp_path).unlink(missing_ok=True)
-        raise
+    _atomic_write_json(target, checkpoint)
+
+
+def _write_completion_checkpoint(run_dir: Path, stage: Stage, run_id: str) -> None:
+    """Mark a finished pipeline so status dashboards do not show stale running state."""
+    checkpoint = {
+        "stage": int(stage),
+        "stage_name": stage.name,
+        "status": "completed",
+        "last_completed_stage": int(stage),
+        "last_completed_name": stage.name,
+        "run_id": run_id,
+        "timestamp": _utcnow_iso(),
+    }
+    _atomic_write_json(run_dir / "checkpoint.json", checkpoint)
+
+
+def _write_rollback_resume_checkpoint(
+    run_dir: Path,
+    *,
+    completed_stage: Stage,
+    rollback_target: Stage,
+    decision: str,
+    run_id: str,
+    attempt: int,
+) -> None:
+    """Record the stage that must be resumed after a decision rollback.
+
+    Stage 15 can legitimately complete with ``decision=refine`` and then
+    recursively re-enter Stage 13.  If the process is stopped during the long
+    Stage 13 experiment, a plain "last completed stage = 15" checkpoint would
+    incorrectly resume at Stage 16.  This explicit resume target preserves the
+    control-loop state across UI stops, account switches, and power outages.
+    """
+    checkpoint = {
+        "stage": int(rollback_target),
+        "stage_name": rollback_target.name,
+        "status": "rollback_pending",
+        "last_completed_stage": int(completed_stage),
+        "last_completed_name": completed_stage.name,
+        "resume_stage": int(rollback_target),
+        "resume_stage_name": rollback_target.name,
+        "rollback_decision": decision,
+        "rollback_attempt": attempt,
+        "run_id": run_id,
+        "timestamp": _utcnow_iso(),
+    }
+    _atomic_write_json(run_dir / "checkpoint.json", checkpoint)
 
 
 def _write_heartbeat(run_dir: Path, stage: Stage, run_id: str) -> None:
@@ -139,6 +330,20 @@ def _write_heartbeat(run_dir: Path, stage: Stage, run_id: str) -> None:
     (run_dir / "heartbeat.json").write_text(
         json.dumps(heartbeat, indent=2), encoding="utf-8"
     )
+    write_control_state(
+        run_dir,
+        run_id=run_id,
+        current_stage=int(stage),
+        current_stage_name=stage.name,
+        observers=stage_observer_snapshot(
+            run_dir,
+            stage=stage,
+            run_id=run_id,
+            current_action=ControlAction.PROCEED,
+            status=StageStatus.RUNNING,
+            substep="heartbeat",
+        ),
+    )
 
 
 def read_checkpoint(run_dir: Path) -> Stage | None:
@@ -148,6 +353,11 @@ def read_checkpoint(run_dir: Path) -> Stage | None:
         return None
     try:
         data = json.loads(cp_path.read_text(encoding="utf-8"))
+        explicit_resume = data.get("resume_stage")
+        if explicit_resume is not None:
+            for stage in STAGE_SEQUENCE:
+                if int(stage) == int(explicit_resume):
+                    return stage
         last_num = data.get("last_completed_stage")
         if last_num is None:
             return None
@@ -383,7 +593,7 @@ def _run_experiment_repair(run_dir: Path, config: RCConfig, run_id: str) -> None
 
     Calls the repair loop from ``experiment_repair.py`` which:
     1. Loads experiment code and diagnosis
-    2. Gets fixes from LLM or OpenCode
+    2. Gets fixes from the configured LLM
     3. Re-runs experiment in sandbox
     4. Re-assesses quality
     5. Repeats up to max_cycles
@@ -478,19 +688,63 @@ def execute_pipeline(
     """Execute pipeline stages sequentially from `from_stage` and write summary."""
 
     _ensure_active_run_log_handler(run_dir)
+    launch_mode = _resolve_launch_mode(run_dir)
+    write_control_state(
+        run_dir,
+        run_id=run_id,
+        current_stage=int(from_stage),
+        current_stage_name=from_stage.name,
+        current_substep="pipeline_start",
+        current_action=ControlAction.PROCEED.value,
+        overall_status=StageStatus.RUNNING.value,
+        launch_mode=launch_mode,
+        waiting_reason="",
+        observers=stage_observer_snapshot(
+            run_dir,
+            stage=from_stage,
+            run_id=run_id,
+            current_action=ControlAction.PROCEED,
+            status=StageStatus.RUNNING,
+            substep="pipeline_start",
+        ),
+    )
     results: list[StageResult] = []
     started = False
     total_stages = len(STAGE_SEQUENCE)
-    launch_mode = _resolve_launch_mode(run_dir)
     terminal_stage = _terminal_stage_for_launch_mode(launch_mode)
 
     for stage in STAGE_SEQUENCE:
         started = _should_start(stage, from_stage, started)
         if not started:
             continue
+        if _maybe_stop_pipeline(run_dir, run_id=run_id, stage=stage):
+            break
 
         stage_num = int(stage)
         prefix = f"[{run_id}] Stage {stage_num:02d}/{total_stages}"
+        _append_run_index_event(
+            run_dir,
+            event="stage_start",
+            payload={"stage": stage_num, "stage_name": stage.name},
+        )
+        write_control_state(
+            run_dir,
+            run_id=run_id,
+            current_stage=stage_num,
+            current_stage_name=stage.name,
+            current_substep="stage_start",
+            current_action=ControlAction.PROCEED.value,
+            overall_status=StageStatus.RUNNING.value,
+            waiting_reason="",
+            observers=stage_observer_snapshot(
+                run_dir,
+                stage=stage,
+                run_id=run_id,
+                current_action=ControlAction.PROCEED,
+                status=StageStatus.RUNNING,
+                substep="stage_start",
+            ),
+        )
         logger.info("%s %s - running", prefix, stage.name)
         print(f"{prefix} {stage.name} — running...")
 
@@ -538,6 +792,49 @@ def execute_pipeline(
             list(result.artifacts),
             result.error or "",
         )
+        _append_run_index_event(
+            run_dir,
+            event="stage_finish",
+            payload={
+                "stage": stage_num,
+                "stage_name": stage.name,
+                "status": result.status.value,
+                "decision": result.decision,
+                "artifacts": list(result.artifacts),
+                "error": result.error or "",
+            },
+        )
+        finish_action = (
+            ControlAction.REQUEST_HUMAN_GATE
+            if result.status == StageStatus.BLOCKED_APPROVAL
+            else (
+                ControlAction.RETRY_SAME_STEP
+                if result.status == StageStatus.FAILED
+                else ControlAction.PROCEED
+            )
+        )
+        write_control_state(
+            run_dir,
+            run_id=run_id,
+            current_stage=stage_num,
+            current_stage_name=stage.name,
+            current_substep="stage_finish",
+            current_action=finish_action.value,
+            overall_status=result.status.value,
+            waiting_reason=result.error or "",
+            observers=stage_observer_snapshot(
+                run_dir,
+                stage=stage,
+                run_id=run_id,
+                result=result,
+                stage_dir=run_dir / f"stage-{stage_num:02d}",
+                artifact_refs=result.artifacts,
+                current_action=finish_action,
+                status=result.status,
+                substep="stage_finish",
+                waiting_reason=result.error or "",
+            ),
+        )
 
         if kb_root is not None and result.status == StageStatus.DONE:
             try:
@@ -557,6 +854,8 @@ def execute_pipeline(
 
         if result.status == StageStatus.DONE:
             _write_checkpoint(run_dir, stage, run_id)
+        if _maybe_stop_pipeline(run_dir, run_id=run_id, stage=stage):
+            break
 
         # --- Experiment diagnosis + repair after Stage 14 (result_analysis) ---
         if (
@@ -585,9 +884,13 @@ def execute_pipeline(
             and result.status == StageStatus.DONE
             and result.decision in DECISION_ROLLBACK
         ):
-            pivot_count = _read_pivot_count(run_dir)
+            counts = _read_decision_counts(run_dir)
+            pivot_count = counts["pivot"]
+            refine_count = counts["refine"]
+            current_decision_count = refine_count if result.decision == "refine" else pivot_count
+            current_limit = MAX_REFINE_DECISIONS if result.decision == "refine" else MAX_PIVOT_DECISIONS
             # R6-4: Skip REFINE if experiment metrics are empty for consecutive cycles
-            if pivot_count > 0 and _consecutive_empty_metrics(run_dir, pivot_count):
+            if result.decision == "refine" and refine_count > 0 and _consecutive_empty_metrics(run_dir, _read_pivot_count(run_dir)):
                 logger.warning(
                     "Consecutive REFINE cycles produced empty metrics — forcing PROCEED"
                 )
@@ -597,26 +900,40 @@ def execute_pipeline(
                 # BUG-211: Promote best stage-14 before proceeding with
                 # empty data — an earlier iteration may have real metrics.
                 _promote_best_stage14(run_dir, config)
-            elif pivot_count < MAX_DECISION_PIVOTS:
+            else:
+                low_yield, low_yield_msg = _recent_low_yield_refine(run_dir)
+                if result.decision == "refine" and low_yield:
+                    request_stop(run_dir, reason=low_yield_msg)
+                    _maybe_stop_pipeline(run_dir, run_id=run_id, stage=stage)
+                    break
+            if current_decision_count < current_limit and not stop_requested(run_dir):
                 rollback_target = DECISION_ROLLBACK[result.decision]
                 _record_decision_history(
-                    run_dir, result.decision, rollback_target, pivot_count + 1
+                    run_dir, result.decision, rollback_target, current_decision_count + 1
                 )
                 logger.info(
                     "Decision %s: rolling back to %s (attempt %d/%d)",
                     result.decision.upper(),
                     rollback_target.name,
-                    pivot_count + 1,
-                    MAX_DECISION_PIVOTS,
+                    current_decision_count + 1,
+                    current_limit,
                 )
                 print(
                     f"[{run_id}] Decision: {result.decision.upper()} → "
                     f"rollback to {rollback_target.name} "
-                    f"(attempt {pivot_count + 1}/{MAX_DECISION_PIVOTS})"
+                    f"(attempt {current_decision_count + 1}/{current_limit})"
                 )
                 # Version existing stage directories before overwriting
                 _version_rollback_stages(
-                    run_dir, rollback_target, pivot_count + 1
+                    run_dir, rollback_target, current_decision_count + 1
+                )
+                _write_rollback_resume_checkpoint(
+                    run_dir,
+                    completed_stage=stage,
+                    rollback_target=rollback_target,
+                    decision=result.decision,
+                    run_id=run_id,
+                    attempt=current_decision_count + 1,
                 )
                 # Recurse from rollback target
                 pivot_results = execute_pipeline(
@@ -635,41 +952,24 @@ def execute_pipeline(
                 # downstream stages use the best data, not just the latest.
                 _promote_best_stage14(run_dir, config)
                 break  # Exit current loop; recursive call handles the rest
-            else:
+            elif not stop_requested(run_dir):
                 # Quality gate: check if experiment results are actually usable
                 _quality_ok, _quality_msg = _check_experiment_quality(
-                    run_dir, pivot_count
+                    run_dir, _read_pivot_count(run_dir)
                 )
-                if not _quality_ok:
-                    logger.warning(
-                        "Max pivot attempts (%d) reached — forcing PROCEED "
-                        "with quality warning: %s",
-                        MAX_DECISION_PIVOTS,
-                        _quality_msg,
-                    )
-                    print(
-                        f"[{run_id}] QUALITY WARNING: {_quality_msg}"
-                    )
-                    # Write quality warning to run directory
-                    _qw_path = run_dir / "quality_warning.txt"
-                    _qw_path.write_text(
-                        f"Max pivots ({MAX_DECISION_PIVOTS}) reached.\n"
-                        f"Quality gate failed: {_quality_msg}\n"
-                        f"Paper will be written but may have significant issues.\n",
-                        encoding="utf-8",
-                    )
-                else:
-                    logger.warning(
-                        "Max pivot attempts (%d) reached — forcing PROCEED",
-                        MAX_DECISION_PIVOTS,
-                    )
-                print(
-                    f"[{run_id}] Max pivot attempts reached — forcing PROCEED"
+                stop_reason = (
+                    f"Max {result.decision} attempts ({current_limit}) reached without high-quality experiment results. "
+                    f"{_quality_msg}"
                 )
-
-                # BUG-205: After forced PROCEED, promote the BEST stage-14
-                # experiment summary across all REFINE iterations.
-                _promote_best_stage14(run_dir, config)
+                logger.warning("%s", stop_reason)
+                print(f"[{run_id}] {stop_reason}")
+                (run_dir / "quality_warning.txt").write_text(
+                    stop_reason + "\n",
+                    encoding="utf-8",
+                )
+                request_stop(run_dir, reason=stop_reason)
+                _maybe_stop_pipeline(run_dir, run_id=run_id, stage=stage)
+                break
 
         if (
             stage == Stage.QUALITY_GATE
@@ -738,7 +1038,50 @@ def execute_pipeline(
         from_stage=from_stage,
         run_dir=run_dir,
     )
+    if stop_requested(run_dir):
+        summary["final_status"] = "stopped"
+        summary["stopped"] = True
     _write_pipeline_summary(run_dir, summary)
+    final_stage_num = int(summary.get("final_stage", int(from_stage)))
+    final_stage: Stage | None = None
+    try:
+        final_stage = Stage(final_stage_num)
+    except (TypeError, ValueError):
+        final_stage = None
+    final_status = str(summary.get("final_status") or "no_stages")
+    if (
+        final_status == StageStatus.DONE.value
+        and final_stage is not None
+        and final_stage == STAGE_SEQUENCE[-1]
+        and not stop_requested(run_dir)
+    ):
+        _write_completion_checkpoint(run_dir, final_stage, run_id)
+    write_control_state(
+        run_dir,
+        run_id=run_id,
+        current_stage=final_stage_num,
+        current_stage_name=final_stage.name if final_stage is not None else "",
+        current_substep="pipeline_complete",
+        current_action=(
+            ControlAction.TERMINATE_RUN.value
+            if final_status == "stopped"
+            else ControlAction.PROCEED.value
+        ),
+        overall_status=final_status,
+        pipeline_summary=summary,
+        observers=stage_observer_snapshot(
+            run_dir,
+            stage=final_stage,
+            run_id=run_id,
+            current_action=(
+                ControlAction.TERMINATE_RUN
+                if final_status == "stopped"
+                else ControlAction.PROCEED
+            ),
+            status=final_status,
+            substep="pipeline_complete",
+        ),
+    )
 
     # --- Evolution: extract and store lessons ---
     lessons: list[object] = []
@@ -1084,6 +1427,15 @@ def _version_rollback_stages(
             if version_dir.exists():
                 shutil.rmtree(version_dir)
             stage_dir.rename(version_dir)
+            _append_run_index_event(
+                run_dir,
+                event="stage_versioned",
+                payload={
+                    "source": stage_dir.name,
+                    "target": version_dir.name,
+                    "attempt": attempt,
+                },
+            )
             logger.debug(
                 "Versioned %s → %s", stage_dir.name, version_dir.name
             )
@@ -1105,6 +1457,15 @@ def _version_stage_range(
             if version_dir.exists():
                 shutil.rmtree(version_dir)
             stage_dir.rename(version_dir)
+            _append_run_index_event(
+                run_dir,
+                event="stage_versioned",
+                payload={
+                    "source": stage_dir.name,
+                    "target": version_dir.name,
+                    "attempt": attempt,
+                },
+            )
             logger.debug(
                 "Versioned %s 鈫?%s", stage_dir.name, version_dir.name
             )
@@ -1156,7 +1517,47 @@ def _promote_best_stage14(run_dir: Path, config: RCConfig) -> None:
     metric_key = config.experiment.metric_key or "primary_metric"
     metric_dir = config.experiment.metric_direction or "maximize"
 
-    candidates: list[tuple[float, Path]] = []
+    def _best_condition_metric(data: dict[str, object]) -> float | None:
+        condition_summaries = data.get("condition_summaries", {})
+        if not isinstance(condition_summaries, dict):
+            return None
+        values: list[float] = []
+        for payload in condition_summaries.values():
+            if not isinstance(payload, dict):
+                continue
+            metrics = payload.get("metrics", {})
+            if not isinstance(metrics, dict):
+                continue
+            for candidate_key in (f"{metric_key}_mean", metric_key):
+                raw_value = metrics.get(candidate_key)
+                if isinstance(raw_value, dict):
+                    raw_value = raw_value.get("mean")
+                try:
+                    if raw_value is not None:
+                        values.append(float(raw_value))
+                        break
+                except (TypeError, ValueError):
+                    continue
+        if not values:
+            return None
+        return max(values) if metric_dir == "maximize" else min(values)
+
+    def _canonicalize_summary(data: dict[str, object]) -> dict[str, object]:
+        canonical = json.loads(json.dumps(data))
+        best_condition_value = _best_condition_metric(canonical)
+        if best_condition_value is None:
+            return canonical
+        metrics_summary = canonical.setdefault("metrics_summary", {})
+        if isinstance(metrics_summary, dict):
+            metrics_summary[metric_key] = {
+                "min": best_condition_value,
+                "max": best_condition_value,
+                "mean": best_condition_value,
+                "count": 1,
+            }
+        return canonical
+
+    candidates: list[tuple[float, Path, dict[str, object]]] = []
     for d in sorted(run_dir.glob("stage-14*")):
         summary_path = d / "experiment_summary.json"
         if not summary_path.exists():
@@ -1165,17 +1566,18 @@ def _promote_best_stage14(run_dir: Path, config: RCConfig) -> None:
             data = json.loads(summary_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        ms = data.get("metrics_summary", {})
-        pm_val: float | None = None
+        canonical_data = _canonicalize_summary(data)
+        pm_val = _best_condition_metric(canonical_data)
+        ms = canonical_data.get("metrics_summary", {})
         # BUG-DA8-03: Exact match first, then substring fallback
         # (avoids "accuracy" matching "balanced_accuracy")
-        if metric_key in ms:
+        if pm_val is None and isinstance(ms, dict) and metric_key in ms:
             _v = ms[metric_key]
             try:
                 pm_val = float(_v["mean"] if isinstance(_v, dict) else _v)
             except (TypeError, ValueError, KeyError):
                 pass
-        if pm_val is None:
+        if pm_val is None and isinstance(ms, dict):
             for k, v in ms.items():
                 if metric_key in k:
                     try:
@@ -1184,7 +1586,7 @@ def _promote_best_stage14(run_dir: Path, config: RCConfig) -> None:
                         pass
                     break
         if pm_val is not None:
-            candidates.append((pm_val, d))
+            candidates.append((pm_val, d, canonical_data))
 
     if not candidates:
         return  # nothing to promote
@@ -1198,7 +1600,7 @@ def _promote_best_stage14(run_dir: Path, config: RCConfig) -> None:
     # collapsed training).  When minimising, a value >1000x smaller than the
     # second-best almost certainly comes from a degenerate iteration.
     if metric_dir == "minimize" and len(candidates) > 1:
-        _bv, _bd = candidates[0]
+        _bv, _bd, _ = candidates[0]
         _sv = candidates[1][0]
         if 0 < _bv < _sv * 1e-3:
             logger.warning(
@@ -1208,14 +1610,17 @@ def _promote_best_stage14(run_dir: Path, config: RCConfig) -> None:
             )
             candidates.pop(0)
 
-    best_val, best_dir = candidates[0]
+    best_val, best_dir, best_data = candidates[0]
 
     # BUG-223: Always write canonical best summary at run root BEFORE any
     # early return, so downstream consumers (Stage 17, Stage 20, Stage 22,
     # VerifiedRegistry) always find experiment_summary_best.json.
     _best_src = best_dir / "experiment_summary.json"
     if _best_src.exists():
-        shutil.copy2(_best_src, run_dir / "experiment_summary_best.json")
+        (run_dir / "experiment_summary_best.json").write_text(
+            json.dumps(best_data, indent=2),
+            encoding="utf-8",
+        )
         logger.info(
             "BUG-223: Wrote experiment_summary_best.json from %s (%.4f)",
             best_dir.name, best_val,
@@ -1240,7 +1645,10 @@ def _promote_best_stage14(run_dir: Path, config: RCConfig) -> None:
             "BUG-205: Promoting %s (%.4f) over stage-14/",
             best_dir.name, best_val,
         )
-        shutil.copy2(best_summary, current_summary)
+        current_summary.write_text(
+            json.dumps(best_data, indent=2),
+            encoding="utf-8",
+        )
         # Also copy charts, analysis, and figure plans if they exist
         for fname in [
             "analysis.md",
@@ -1342,18 +1750,119 @@ def _check_experiment_quality(
     return True, "Quality checks passed"
 
 
-def _read_pivot_count(run_dir: Path) -> int:
-    """Read how many PIVOT/REFINE decisions have been made so far."""
+def _extract_primary_metric_value(summary_path: Path) -> float | None:
+    try:
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    metric_key = str(data.get("metric_key", "primary_metric"))
+    ms = data.get("metrics_summary", {})
+    if not isinstance(ms, dict):
+        return None
+    if metric_key in ms:
+        value = ms[metric_key]
+        if isinstance(value, dict):
+            value = value.get("mean")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    for key, value in ms.items():
+        if metric_key in str(key):
+            if isinstance(value, dict):
+                value = value.get("mean")
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _stage15_has_new_target_refine_override(run_dir: Path) -> bool:
+    """Return true when Stage 15 REFINE intentionally changes the experiment target."""
+    stage15_dir = run_dir / "stage-15"
+    structured_path = stage15_dir / "decision_structured.json"
+    decision = ""
+    if structured_path.exists():
+        try:
+            payload = json.loads(structured_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                decision = str(payload.get("decision") or "").strip().lower()
+        except (json.JSONDecodeError, OSError, TypeError, ValueError):
+            decision = ""
+    if decision != "refine":
+        return False
+
+    text_parts: list[str] = []
+    for name in ("phase2_handoff.md", "decision.md"):
+        path = stage15_dir / name
+        if path.exists():
+            try:
+                text_parts.append(path.read_text(encoding="utf-8"))
+            except OSError:
+                pass
+    normalized = "\n".join(text_parts).lower()
+    if "falcon_qb_activation_rank" not in normalized:
+        return False
+    target_shift_tokens = (
+        "new target override",
+        "primary practical method",
+        "matched-budget",
+        "matched budget",
+        "strict h1",
+        "factorization",
+        "二因素",
+        "补实验",
+    )
+    return any(token in normalized for token in target_shift_tokens)
+
+
+def _recent_low_yield_refine(run_dir: Path) -> tuple[bool, str]:
+    """Detect whether recent refine cycles produced negligible metric gains."""
+    if _stage15_has_new_target_refine_override(run_dir):
+        return False, ""
+    summary_paths = sorted(run_dir.glob("stage-14*/experiment_summary.json"))
+    if len(summary_paths) < 3:
+        return False, ""
+    values = [_extract_primary_metric_value(path) for path in summary_paths[-3:]]
+    if any(v is None for v in values):
+        return False, ""
+    first, second, third = values
+    if first is None or second is None or third is None:
+        return False, ""
+    gain1 = abs(second - first)
+    gain2 = abs(third - second)
+    if gain1 < 0.005 and gain2 < 0.005:
+        return True, (
+            "Recent REFINE cycles produced negligible primary-metric gains "
+            f"({gain1:.4f}, {gain2:.4f}); stop instead of looping."
+        )
+    return False, ""
+
+
+def _read_decision_counts(run_dir: Path) -> dict[str, int]:
+    """Read refine/pivot counts separately from decision history."""
     history_path = run_dir / "decision_history.json"
+    counts = {"refine": 0, "pivot": 0}
     if not history_path.exists():
-        return 0
+        return counts
     try:
         data = json.loads(history_path.read_text(encoding="utf-8"))
         if isinstance(data, list):
-            return len(data)
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                decision = str(item.get("decision", "")).lower()
+                if decision in counts:
+                    counts[decision] += 1
     except (json.JSONDecodeError, OSError):
         pass
-    return 0
+    return counts
+
+
+def _read_pivot_count(run_dir: Path) -> int:
+    counts = _read_decision_counts(run_dir)
+    return counts["refine"] + counts["pivot"]
 
 
 def _record_decision_history(
@@ -1378,6 +1887,33 @@ def _record_decision_history(
     })
     history_path.write_text(
         json.dumps(history, indent=2), encoding="utf-8"
+    )
+    _append_run_index_event(
+        run_dir,
+        event="decision",
+        payload={
+            "decision": decision,
+            "rollback_target": rollback_target.name,
+            "attempt": attempt,
+        },
+    )
+    event_type = "rollback_to_stage" if decision in {"rollback", "refine"} else "pivot_hypothesis"
+    append_supervisor_event(
+        run_dir,
+        event_type=event_type,
+        status="warning",
+        summary=(
+            f"Decision {decision} recorded; control flow will return to "
+            f"{rollback_target.name}."
+        ),
+        stage=int(rollback_target),
+        stage_name=rollback_target.name,
+        alerts=[event_type],
+        payload={
+            "decision": decision,
+            "rollback_target": rollback_target.name,
+            "attempt": attempt,
+        },
     )
 
 
@@ -1560,40 +2096,20 @@ def _metaclaw_post_pipeline(
         return
 
     from researchclaw.llm.client import LLMClient
+    feedback_store = None
+    llm = None
 
     # 1. Lesson-to-skill conversion
-    l2s = getattr(bridge, "lesson_to_skill", None)
-    if l2s and getattr(l2s, "enabled", False) and lessons:
-        try:
-            from researchclaw.metaclaw_bridge.lesson_to_skill import (
-                convert_lessons_to_skills,
-            )
-
-            min_sev = getattr(l2s, "min_severity", "warning")
-            llm = LLMClient.from_rc_config(config)
-            new_skills = convert_lessons_to_skills(
-                lessons,
-                llm,
-                getattr(bridge, "skills_dir", "~/.metaclaw/skills"),
-                min_severity=min_sev,
-                max_skills=getattr(l2s, "max_skills_per_run", 3),
-            )
-            if new_skills:
-                logger.info(
-                    "MetaClaw: generated %d new skills from lessons: %s",
-                    len(new_skills),
-                    new_skills,
-                )
-        except Exception:  # noqa: BLE001
-            logger.warning("MetaClaw lesson-to-skill conversion failed", exc_info=True)
-
-    # 2. Skill effectiveness feedback
+    # 1. Skill effectiveness feedback
     try:
         from researchclaw.metaclaw_bridge.skill_feedback import (
             SkillFeedbackStore,
             record_stage_skills,
         )
-        from researchclaw.metaclaw_bridge.stage_skill_map import get_stage_config
+        from researchclaw.metaclaw_bridge.stage_skill_map import (
+            get_stage_config,
+            summarize_stage_policy,
+        )
 
         feedback_store = SkillFeedbackStore(run_dir / "evolution" / "skill_effectiveness.jsonl")
         for result in results:
@@ -1615,6 +2131,23 @@ def _metaclaw_post_pipeline(
             active_skills = stage_config.get("skills", [])
             status = str(getattr(result, "status", ""))
             success = "done" in status.lower()
+            stage_dir = run_dir / f"stage-{stage_num:02d}"
+            stage_health_path = stage_dir / "stage_health.json"
+            wall_time_sec = None
+            if stage_health_path.exists():
+                try:
+                    stage_health = json.loads(stage_health_path.read_text(encoding="utf-8"))
+                    if isinstance(stage_health, dict) and isinstance(stage_health.get("duration_sec"), (int, float)):
+                        wall_time_sec = float(stage_health["duration_sec"])
+                except (json.JSONDecodeError, OSError, TypeError, ValueError):
+                    wall_time_sec = None
+            hints = getattr(result, "control_hints", {}) or {}
+            quality_gain = None
+            raw_quality = hints.get("quality_gain")
+            if isinstance(raw_quality, (int, float)):
+                quality_gain = float(raw_quality)
+            rollback_risk_delta = -0.5 if success and getattr(result, "decision", "") not in {"rollback", "pivot"} else 0.5
+            artifact_quality_delta = 1.0 if success and getattr(result, "artifacts", ()) else 0.0
 
             if active_skills:
                 record_stage_skills(
@@ -1623,9 +2156,50 @@ def _metaclaw_post_pipeline(
                     run_id,
                     success,
                     active_skills,
+                    wall_time_sec=wall_time_sec,
+                    quality_gain=quality_gain,
+                    rollback_risk_delta=rollback_risk_delta,
+                    artifact_quality_delta=artifact_quality_delta,
+                    stage_policy=summarize_stage_policy(stage_name).strip(),
                 )
     except Exception:  # noqa: BLE001
         logger.warning("MetaClaw skill feedback recording failed")
+
+    # 2. Controlled skill evolution loop
+    try:
+        evolution_cfg = getattr(bridge, "skill_evolution", None)
+        l2s = getattr(bridge, "lesson_to_skill", None)
+        if (
+            evolution_cfg
+            and getattr(evolution_cfg, "enabled", True)
+            and lessons
+            and feedback_store is not None
+        ):
+            from researchclaw.metaclaw_bridge.skill_evolution import SkillEvolutionManager
+
+            manager = SkillEvolutionManager(getattr(bridge, "skills_dir", "~/.metaclaw/skills"))
+            report = manager.run_loop(
+                lessons=lessons,
+                feedback_store=feedback_store,
+                run_id=run_id,
+                max_candidates_per_run=getattr(evolution_cfg, "max_candidates_per_run", 2),
+                max_trial_skills=getattr(evolution_cfg, "max_trial_skills", 1),
+                min_trial_records=getattr(evolution_cfg, "min_trial_records", 2),
+                promote_success_rate=getattr(evolution_cfg, "promote_success_rate", 0.65),
+                reject_success_rate=getattr(evolution_cfg, "reject_success_rate", 0.35),
+            )
+            created = report.get("created_candidates") or []
+            scheduled = report.get("scheduled_trials") or []
+            decisions = report.get("trial_decisions") or {}
+            logger.info(
+                "MetaClaw: skill evolution loop completed (candidates=%d, scheduled_trials=%d, promoted=%d, rejected=%d)",
+                len(created) if isinstance(created, list) else 0,
+                len(scheduled) if isinstance(scheduled, list) else 0,
+                len(decisions.get("promoted", [])) if isinstance(decisions, dict) else 0,
+                len(decisions.get("rejected", [])) if isinstance(decisions, dict) else 0,
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning("MetaClaw skill evolution loop failed", exc_info=True)
 
     # 3. Signal session end (fire-and-forget)
     try:

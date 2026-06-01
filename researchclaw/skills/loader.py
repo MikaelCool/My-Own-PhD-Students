@@ -12,6 +12,10 @@ from researchclaw.skills.schema import Skill
 logger = logging.getLogger(__name__)
 
 
+def _is_internal_relative(path: Path) -> bool:
+    return any(part.startswith(".") for part in path.parts)
+
+
 # ── SKILL.md loader ──────────────────────────────────────────────────
 
 
@@ -104,6 +108,9 @@ def load_skillmd_from_directory(directory: Path) -> list[Skill]:
         return skills
 
     for skill_md in sorted(directory.rglob("SKILL.md")):
+        rel = skill_md.relative_to(directory)
+        if _is_internal_relative(rel.parent):
+            continue
         skill = load_skill_from_skillmd(skill_md)
         if skill:
             skills.append(skill)
@@ -164,14 +171,28 @@ def load_skills_from_directory(directory: Path) -> list[Skill]:
     if not directory.exists():
         return []
 
-    # 1. Load SKILL.md files first (higher priority)
-    for skill in load_skillmd_from_directory(directory):
-        skills_by_name[skill.name] = skill
+    # 1. Load SKILL.md files first (higher priority).  Directories that contain
+    # a SKILL.md often include auxiliary config/eval YAML or JSON files, which
+    # should not be interpreted as legacy skill definitions.
+    skillmd_dirs: set[Path] = set()
+    for skill_md in sorted(directory.rglob("SKILL.md")):
+        rel = skill_md.relative_to(directory)
+        if _is_internal_relative(rel.parent):
+            continue
+        skillmd_dirs.add(skill_md.parent)
+        skill = load_skill_from_skillmd(skill_md)
+        if skill:
+            skills_by_name[skill.name] = skill
 
     # 2. Load legacy YAML/JSON (only if no SKILL.md with same name)
     for pattern in ("*.yaml", "*.yml", "*.json"):
         for path in sorted(directory.rglob(pattern)):
             if path.name == "__init__.py":
+                continue
+            rel = path.relative_to(directory)
+            if _is_internal_relative(rel.parent):
+                continue
+            if any(path.is_relative_to(skill_dir) for skill_dir in skillmd_dirs):
                 continue
             skill = load_skill_file(path)
             if skill and skill.name not in skills_by_name:

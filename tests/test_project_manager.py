@@ -288,17 +288,65 @@ class TestProjectManager:
             encoding="utf-8",
         )
         (run_root / "stage-19" / "paper_revised.md").write_text("# Revised", encoding="utf-8")
+        (run_root / "run_control_state.json").write_text(
+            json.dumps(
+                {
+                    "current_stage": 19,
+                    "current_stage_name": "PAPER_REVISION",
+                    "current_substep": "revise_figures",
+                    "current_action": "proceed",
+                    "waiting_reason": "",
+                    "active_session_backend": "openclaw_gateway",
+                    "observers": {
+                        "stage_progress": {
+                            "current_stage": 19,
+                            "current_stage_name": "PAPER_REVISION",
+                            "current_substep": "revise_figures",
+                            "status": "running",
+                            "waiting_reason": "",
+                        },
+                        "session_health": {"backend": "openclaw_gateway"},
+                        "resource_state": {"waiting": False, "waiting_reason": ""},
+                        "risk_flags": [],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_root / "run_index.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "events": [
+                        {
+                            "event": "supervisor_event",
+                            "timestamp": "2026-01-01T00:10:00+00:00",
+                            "event_type": "session_switched",
+                            "status": "warning",
+                            "summary": "Session backend switched from acp:codex to openclaw_gateway.",
+                            "stage": 19,
+                            "stage_name": "PAPER_REVISION",
+                            "alerts": ["session_degraded"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
 
         canvas = manager.materialize_canvas("graph_proj")
         node_types = {node["type"] for node in canvas["nodes"]}
         edge_kinds = {edge["kind"] for edge in canvas["edges"]}
 
         assert canvas["meta"]["latest_run_id"] == run_id
+        assert canvas["meta"]["supervisor_event_count"] == 1
         assert "run" in node_types
         assert "stage" in node_types
         assert "review" in node_types
         assert "decision" in node_types
+        assert "supervisor" in node_types
         assert "rollback" in edge_kinds
+        assert "supervisor" in edge_kinds
 
     def test_materialize_studio_exposes_messages_and_timeline(
         self, manager: ProjectManager, config_yaml: Path
@@ -332,6 +380,49 @@ class TestProjectManager:
             "[stage-01] collected evidence\n[stage-18] review loop active\n",
             encoding="utf-8",
         )
+        (run_root / "run_control_state.json").write_text(
+            json.dumps(
+                {
+                    "current_stage": 18,
+                    "current_stage_name": "PEER_REVIEW",
+                    "current_substep": "review_loop",
+                    "current_action": "proceed",
+                    "waiting_reason": "",
+                    "active_session_backend": "openclaw_gateway",
+                    "observers": {
+                        "stage_progress": {
+                            "current_stage": 18,
+                            "current_stage_name": "PEER_REVIEW",
+                            "current_substep": "review_loop",
+                            "status": "running",
+                            "waiting_reason": "",
+                        },
+                        "session_health": {"backend": "openclaw_gateway"},
+                        "resource_state": {"waiting": False, "waiting_reason": ""},
+                        "risk_flags": [],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_root / "run_index.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "events": [
+                        {
+                            "event": "supervisor_event",
+                            "timestamp": "2026-01-01T00:10:00+00:00",
+                            "event_type": "session_switched",
+                            "status": "warning",
+                            "summary": "Session backend switched from acp:codex to openclaw_gateway.",
+                            "alerts": ["session_degraded"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
         manager.finish_run("studio_proj", "completed", summary="Review package is ready.")
 
         studio = manager.materialize_studio("studio_proj")
@@ -341,6 +432,81 @@ class TestProjectManager:
         assert any(message["role"] == "assistant" for message in studio["messages"])
         assert studio["timeline"]
         assert any(event["kind"] == "stage" for event in studio["timeline"])
+        assert studio["observer_summary"]["headline"] == "PEER_REVIEW @ review_loop"
+        assert studio["supervisor_events"][-1]["event_type"] == "session_switched"
+        assert any(event["kind"] == "supervisor" for event in studio["timeline"])
+
+    def test_materialize_details_exposes_observer_summary_and_supervisor_events(
+        self, manager: ProjectManager, config_yaml: Path
+    ) -> None:
+        project = manager.create("details_proj", str(config_yaml), topic="details")
+        run_id = manager.start_run("details_proj", run_id="rc-20260104-000000-det111")
+        run_root = Path(project.run_dir) / run_id
+        run_root.mkdir(parents=True, exist_ok=True)
+        (run_root / "checkpoint.json").write_text(
+            json.dumps(
+                {
+                    "stage": 12,
+                    "stage_name": "EXPERIMENT_RUN",
+                    "status": "running",
+                    "start_time": "2026-01-04T00:00:00+00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_root / "run_control_state.json").write_text(
+            json.dumps(
+                {
+                    "current_stage": 12,
+                    "current_stage_name": "EXPERIMENT_RUN",
+                    "current_substep": "gpu-wait-heartbeat",
+                    "current_action": "wait_for_resource",
+                    "waiting_reason": "Waiting for a process-free GPU.",
+                    "active_session_backend": "openclaw_gateway",
+                    "observers": {
+                        "stage_progress": {
+                            "current_stage": 12,
+                            "current_stage_name": "EXPERIMENT_RUN",
+                            "current_substep": "gpu-wait-heartbeat",
+                            "status": "running",
+                            "waiting_reason": "Waiting for a process-free GPU.",
+                        },
+                        "session_health": {"backend": "openclaw_gateway"},
+                        "resource_state": {
+                            "waiting": True,
+                            "waiting_reason": "Waiting for a process-free GPU.",
+                        },
+                        "risk_flags": [],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_root / "run_index.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "events": [
+                        {
+                            "event": "supervisor_event",
+                            "timestamp": "2026-01-04T00:10:00+00:00",
+                            "event_type": "gpu_waiting",
+                            "status": "warning",
+                            "summary": "ResearchClaw is still waiting for process-free GPUs.",
+                            "alerts": ["gpu:waiting"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        details = manager.materialize_details("details_proj")
+
+        assert details["observer_summary"]["headline"] == "Waiting for a process-free GPU."
+        assert details["latest_run"]["current_substep"] == "gpu-wait-heartbeat"
+        assert details["latest_run"]["active_session_backend"] == "openclaw_gateway"
+        assert details["supervisor_events"][-1]["event_type"] == "gpu_waiting"
 
     def test_latest_recoverable_run_prefers_last_run_with_checkpoint(
         self, manager: ProjectManager, config_yaml: Path
@@ -407,6 +573,166 @@ class TestProjectManager:
         assert studio["controls"]["can_continue"] is True
         assert studio["controls"]["continue_run_id"] == run_id
         assert studio["controls"]["continue_from_stage"] == "RESOURCE_PLANNING"
+
+    def test_effective_project_prefers_latest_run_status_over_registry(
+        self, manager: ProjectManager, config_yaml: Path
+    ) -> None:
+        project = manager.create("sync_proj", str(config_yaml), topic="sync status")
+        run_id = manager.start_run("sync_proj", run_id="rc-20260105-000000-sync11")
+        run_root = Path(project.run_dir) / run_id
+        run_root.mkdir(parents=True, exist_ok=True)
+        (run_root / "checkpoint.json").write_text(
+            json.dumps(
+                {
+                    "stage": 13,
+                    "stage_name": "ITERATIVE_REFINE",
+                    "status": "running",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_root / "run_control_state.json").write_text(
+            json.dumps(
+                {
+                    "current_stage": 13,
+                    "current_stage_name": "ITERATIVE_REFINE",
+                    "current_substep": "method_redesign",
+                    "current_action": "proceed",
+                    "waiting_reason": "",
+                    "active_session_backend": "openclaw_gateway",
+                    "observers": {
+                        "stage_progress": {
+                            "current_stage": 13,
+                            "current_stage_name": "ITERATIVE_REFINE",
+                            "current_substep": "method_redesign",
+                            "status": "running",
+                            "waiting_reason": "",
+                        },
+                        "session_health": {"backend": "openclaw_gateway"},
+                        "resource_state": {"waiting": False, "waiting_reason": ""},
+                        "risk_flags": [],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        manager.finish_run("sync_proj", "stopped", summary="Stopped from web workspace.")
+
+        details = manager.materialize_details("sync_proj")
+        studio = manager.materialize_studio("sync_proj")
+
+        assert details["project"]["status"] == "running"
+        assert details["project"]["latest_summary"] == "ITERATIVE_REFINE @ method_redesign"
+        assert studio["project"]["status"] == "running"
+        assert studio["controls"]["can_stop"] is True
+        assert studio["controls"]["can_continue"] is False
+
+    def test_latest_run_status_prefers_control_state_running(
+        self, manager: ProjectManager, config_yaml: Path
+    ) -> None:
+        project = manager.create("latest_run_sync", str(config_yaml), topic="latest run sync")
+        run_id = manager.start_run("latest_run_sync", run_id="rc-20260105-000000-sync12")
+        run_root = Path(project.run_dir) / run_id
+        run_root.mkdir(parents=True, exist_ok=True)
+        (run_root / "checkpoint.json").write_text(
+            json.dumps(
+                {
+                    "stage": 13,
+                    "stage_name": "ITERATIVE_REFINE",
+                    "status": "failed",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_root / "run_control_state.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "rc-20260105-000000-sync12-restarted",
+                    "current_stage": 13,
+                    "current_stage_name": "ITERATIVE_REFINE",
+                    "overall_status": "running",
+                    "current_substep": "execute_stage",
+                    "current_action": "proceed",
+                    "observers": {
+                        "stage_progress": {
+                            "current_stage": 13,
+                            "current_stage_name": "ITERATIVE_REFINE",
+                            "current_substep": "execute_stage",
+                            "status": "running",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        manager.finish_run("latest_run_sync", "failed", summary="stale snapshot")
+
+        latest = manager.latest_run("latest_run_sync")
+
+        assert latest is not None
+        assert latest["status"] == "running"
+        assert latest["is_active"] is True
+
+    def test_latest_run_running_normalizes_stale_failure_fields(
+        self, manager: ProjectManager, config_yaml: Path
+    ) -> None:
+        project = manager.create("latest_run_stage_sync", str(config_yaml), topic="stage sync")
+        run_id = manager.start_run("latest_run_stage_sync", run_id="rc-20260105-000000-sync13")
+        run_root = Path(project.run_dir) / run_id
+        run_root.mkdir(parents=True, exist_ok=True)
+        (run_root / "checkpoint.json").write_text(
+            json.dumps(
+                {
+                    "stage": 13,
+                    "stage_name": "ITERATIVE_REFINE",
+                    "status": "failed",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_root / "run_control_state.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "rc-20260105-000000-sync13-restarted",
+                    "current_stage": 13,
+                    "current_stage_name": "ITERATIVE_REFINE",
+                    "overall_status": "running",
+                    "latest_stage_result": {
+                        "stage": 13,
+                        "stage_name": "ITERATIVE_REFINE",
+                        "status": "failed",
+                        "decision": "retry",
+                        "error": "stale timeout",
+                    },
+                    "pipeline_summary": {
+                        "final_status": "failed",
+                        "final_stage": 13,
+                        "stages_failed": 1,
+                    },
+                    "current_substep": "execute_stage",
+                    "current_action": "proceed",
+                    "observers": {
+                        "stage_progress": {
+                            "current_stage": 13,
+                            "current_stage_name": "ITERATIVE_REFINE",
+                            "current_substep": "execute_stage",
+                            "status": "running",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        manager.finish_run("latest_run_stage_sync", "failed", summary="stale snapshot")
+
+        latest = manager.latest_run("latest_run_stage_sync")
+
+        assert latest is not None
+        assert latest["status"] == "running"
+        assert latest["latest_stage_result"]["status"] == "running"
+        assert latest["previous_stage_result"]["status"] == "failed"
+        assert latest["pipeline_summary"]["final_status"] == "running"
+        assert latest["previous_pipeline_summary"]["final_status"] == "failed"
 
 
 # ══════════════════════════════════════════════════════════════════

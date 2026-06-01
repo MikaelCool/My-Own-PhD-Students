@@ -6,11 +6,17 @@ import json
 import logging
 import re
 import shutil
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from researchclaw.dashboard.collector import DashboardCollector
+from researchclaw.pipeline.control_state import (
+    read_control_state,
+    recent_supervisor_events,
+    summarize_control_state,
+)
 from researchclaw.pipeline.stages import PHASE_MAP, Stage
 from researchclaw.project.models import Project
 
@@ -138,12 +144,152 @@ class ProjectManager:
         collector = DashboardCollector(artifacts_dir=self.get(name).run_dir)
         for snap in collector.collect_all():
             if snap.run_id == run_id:
-                return snap.to_dict()
+                return self._augment_run_snapshot(self.get(name), snap.to_dict())
         raise KeyError(f"Unknown run '{run_id}' for project '{name}'")
 
     def latest_run(self, name: str) -> dict[str, Any] | None:
         runs = self.list_runs(name)
-        return runs[0] if runs else None
+        if not runs:
+            return None
+        return self._augment_run_snapshot(self.get(name), runs[0])
+
+    def effective_project(self, name: str) -> Project:
+        return self._effective_project(self.get(name), self.latest_run(name))
+
+    def _augment_run_snapshot(
+        self,
+        project: Project,
+        run: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload = dict(run)
+        run_id = str(payload.get("run_id") or "").strip()
+        if not run_id:
+            payload.setdefault("observer_summary", {})
+            payload.setdefault("supervisor_events", [])
+            return payload
+        run_root = Path(project.run_dir) / run_id
+        control_state = read_control_state(run_root)
+        if control_state:
+            payload["control_state"] = control_state
+            payload["current_substep"] = str(control_state.get("current_substep") or "")
+            payload["current_action"] = str(control_state.get("current_action") or "")
+            payload["waiting_reason"] = str(control_state.get("waiting_reason") or "")
+            payload["active_session_backend"] = str(
+                control_state.get("active_session_backend") or ""
+            )
+            overall_status = str(control_state.get("overall_status") or "").strip().lower()
+            stage_progress = (
+                control_state.get("observers", {}).get("stage_progress", {})
+                if isinstance(control_state, dict)
+                else {}
+            )
+            stage_status = str(stage_progress.get("status") or "").strip().lower()
+            if overall_status == "running" or stage_status == "running":
+                payload["status"] = "running"
+                payload["is_active"] = True
+                self._normalize_current_run_status(payload, control_state)
+            payload["observer_summary"] = summarize_control_state(run_root, control_state)
+        else:
+            payload.setdefault("observer_summary", {})
+        payload["supervisor_events"] = recent_supervisor_events(run_root, limit=8)
+        return payload
+
+    @staticmethod
+    def _normalize_current_run_status(
+        payload: dict[str, Any],
+        control_state: dict[str, Any],
+    ) -> None:
+        current_stage = control_state.get("current_stage")
+        current_stage_name = str(control_state.get("current_stage_name") or "")
+        stale_stage_result = payload.get("latest_stage_result")
+        if not isinstance(stale_stage_result, dict):
+            control_stage_result = control_state.get("latest_stage_result")
+            if isinstance(control_stage_result, dict):
+                stale_stage_result = control_stage_result
+        if isinstance(stale_stage_result, dict):
+            stale_status = str(stale_stage_result.get("status") or "").strip().lower()
+            if stale_status and stale_status != "running":
+                payload["previous_stage_result"] = stale_stage_result
+        payload["latest_stage_result"] = {
+            "stage": current_stage,
+            "stage_name": current_stage_name,
+            "status": "running",
+            "decision": "",
+            "error": "",
+            "artifacts": [],
+            "evidence_refs": [],
+        }
+
+        stale_pipeline_summary = payload.get("pipeline_summary")
+        if not isinstance(stale_pipeline_summary, dict):
+            control_pipeline_summary = control_state.get("pipeline_summary")
+            if isinstance(control_pipeline_summary, dict):
+                stale_pipeline_summary = control_pipeline_summary
+        if isinstance(stale_pipeline_summary, dict):
+            stale_final_status = str(stale_pipeline_summary.get("final_status") or "").strip().lower()
+            if stale_final_status and stale_final_status != "running":
+                payload["previous_pipeline_summary"] = stale_pipeline_summary
+        normalized_summary = dict(stale_pipeline_summary) if isinstance(stale_pipeline_summary, dict) else {}
+        normalized_summary["final_status"] = "running"
+        normalized_summary["final_stage"] = current_stage
+        if current_stage_name:
+            normalized_summary["final_stage_name"] = current_stage_name
+        normalized_summary["stages_failed"] = 0
+        payload["pipeline_summary"] = normalized_summary
+
+    def _effective_project(
+        self,
+        project: Project,
+        latest_run: dict[str, Any] | None = None,
+    ) -> Project:
+        latest = latest_run if latest_run is not None else self.latest_run(project.name)
+        if not isinstance(latest, dict):
+            return project
+
+        run_status = str(latest.get("status") or "").strip().lower()
+        if not run_status:
+            return project
+
+        control_state = latest.get("control_state", {})
+        stage_progress = (
+            control_state.get("observers", {}).get("stage_progress", {})
+            if isinstance(control_state, dict)
+            else {}
+        )
+        running_signal = bool(
+            latest.get("is_active")
+            or str(control_state.get("overall_status") or "").strip().lower() == "running"
+            or str(stage_progress.get("status") or "").strip().lower() == "running"
+        )
+        if run_status == "running" and not running_signal:
+            return project
+
+        effective = replace(project)
+        effective.status = run_status
+        run_id = str(latest.get("run_id") or "").strip()
+        if run_id:
+            effective.last_run_id = run_id
+
+        observer_summary = latest.get("observer_summary", {})
+        headline = str(observer_summary.get("headline") or "").strip()
+        current_stage_name = str(latest.get("current_stage_name") or "").strip()
+        current_substep = str(latest.get("current_substep") or "").strip()
+        waiting_reason = str(latest.get("waiting_reason") or "").strip()
+        run_error = str(latest.get("error") or "").strip()
+
+        if run_status == "running":
+            if headline:
+                effective.latest_summary = headline
+            elif waiting_reason:
+                effective.latest_summary = waiting_reason
+            elif current_stage_name and current_substep:
+                effective.latest_summary = f"{current_stage_name} @ {current_substep}"
+            elif current_stage_name:
+                effective.latest_summary = f"{current_stage_name} running"
+        elif run_error:
+            effective.latest_summary = run_error
+
+        return effective
 
     def latest_recoverable_run(self, name: str) -> dict[str, Any] | None:
         """Return the most recent run that has a resumable checkpoint."""
@@ -244,7 +390,7 @@ class ProjectManager:
         return sorted(self.projects.values(), key=lambda p: p.created_at)
 
     def get_status(self) -> dict[str, Any]:
-        projects = self.list_all()
+        projects = [self._effective_project(project) for project in self.list_all()]
         return {
             "total": len(projects),
             "active": self._active,
@@ -331,11 +477,24 @@ class ProjectManager:
     def materialize_details(self, name: str) -> dict[str, Any]:
         project = self.get(name)
         latest_run = self.latest_run(name)
+        effective_project = self._effective_project(project, latest_run)
         startup_contract = self.read_startup_contract(name)
+        observer_summary = (
+            latest_run.get("observer_summary", {})
+            if isinstance(latest_run, dict)
+            else {}
+        )
+        supervisor_events = (
+            latest_run.get("supervisor_events", [])
+            if isinstance(latest_run, dict)
+            else []
+        )
         return {
-            "project": project.to_dict(),
+            "project": effective_project.to_dict(),
             "startup_contract": startup_contract,
             "latest_run": latest_run,
+            "observer_summary": observer_summary,
+            "supervisor_events": supervisor_events,
             "workspace_files": self.list_workspace_files(name, limit=120),
             "key_artifacts": _collect_key_artifacts(Path(project.run_dir)),
         }
@@ -343,19 +502,20 @@ class ProjectManager:
     def materialize_canvas(self, name: str) -> dict[str, Any]:
         project = self.get(name)
         latest_run = self.latest_run(name)
+        effective_project = self._effective_project(project, latest_run)
         startup_contract = self.read_startup_contract(name)
         project_node_id = f"project:{project.name}"
         nodes: list[dict[str, Any]] = [
             {
                 "id": project_node_id,
                 "type": "project",
-                "label": project.title or project.name,
+                "label": effective_project.title or effective_project.name,
                 "layer": 0,
                 "sort": 0,
                 "meta": {
-                    "topic": project.topic,
-                    "launch_mode": project.launch_mode,
-                    "status": project.status,
+                    "topic": effective_project.topic,
+                    "launch_mode": effective_project.launch_mode,
+                    "status": effective_project.status,
                 },
             }
         ]
@@ -514,14 +674,39 @@ class ProjectManager:
                         }
                     )
 
+            supervisor_nodes = _supervisor_canvas_nodes(
+                latest_run,
+                run_node_id=run_node_id or project_node_id,
+            )
+            for idx, supervisor in enumerate(supervisor_nodes, start=1):
+                node_id = f"supervisor:{idx}"
+                nodes.append(
+                    {
+                        "id": node_id,
+                        "type": supervisor["type"],
+                        "label": supervisor["label"],
+                        "layer": 5,
+                        "sort": 300 + idx,
+                        "meta": supervisor["meta"],
+                    }
+                )
+                edges.append(
+                    {
+                        "source": supervisor["source"],
+                        "target": node_id,
+                        "kind": supervisor["edge_kind"],
+                    }
+                )
+
         return {
             "meta": {
-                "project_id": project.name,
-                "title": project.title or project.name,
-                "launch_mode": project.launch_mode,
-                "topic": project.topic,
+                "project_id": effective_project.name,
+                "title": effective_project.title or effective_project.name,
+                "launch_mode": effective_project.launch_mode,
+                "topic": effective_project.topic,
                 "latest_run_id": latest_run["run_id"] if latest_run else None,
                 "phases": [label.split(":", 1)[-1].strip() for label in PHASE_MAP],
+                "supervisor_event_count": len(latest_run.get("supervisor_events", [])) if latest_run else 0,
             },
             "nodes": nodes,
             "edges": edges,
@@ -530,6 +715,7 @@ class ProjectManager:
     def materialize_studio(self, name: str) -> dict[str, Any]:
         project = self.get(name)
         latest_run = self.latest_run(name)
+        effective_project = self._effective_project(project, latest_run)
         recoverable_run = self.latest_recoverable_run(name)
         startup_contract = self.read_startup_contract(name)
         logs: list[str] = []
@@ -538,17 +724,29 @@ class ProjectManager:
             log_path = run_dir / "pipeline.log"
             if log_path.exists():
                 logs = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-120:]
+        observer_summary = (
+            latest_run.get("observer_summary", {})
+            if isinstance(latest_run, dict)
+            else {}
+        )
+        supervisor_events = (
+            latest_run.get("supervisor_events", [])
+            if isinstance(latest_run, dict)
+            else []
+        )
         return {
-            "project": project.to_dict(),
+            "project": effective_project.to_dict(),
             "latest_run": latest_run,
+            "observer_summary": observer_summary,
+            "supervisor_events": supervisor_events,
             "logs": logs,
-            "messages": _build_studio_messages(project, startup_contract, latest_run, logs),
-            "timeline": _build_studio_timeline(project, latest_run),
+            "messages": _build_studio_messages(effective_project, startup_contract, latest_run, logs),
+            "timeline": _build_studio_timeline(effective_project, latest_run),
             "controls": {
-                "can_start": project.status != "running",
-                "can_stop": project.status == "running",
-                "can_continue": project.status != "running" and recoverable_run is not None,
-                "launch_mode": project.launch_mode,
+                "can_start": effective_project.status != "running",
+                "can_stop": effective_project.status == "running",
+                "can_continue": effective_project.status != "running" and recoverable_run is not None,
+                "launch_mode": effective_project.launch_mode,
                 "continue_run_id": recoverable_run["run_id"] if recoverable_run else None,
                 "continue_from_stage": recoverable_run["from_stage"] if recoverable_run else None,
             },
@@ -849,6 +1047,24 @@ def _build_studio_messages(
             f"Stage: {latest_run.get('current_stage_name') or latest_run.get('current_stage') or 0}",
             f"Launch Mode: {project.launch_mode}",
         ]
+        observer_summary = (
+            latest_run.get("observer_summary")
+            if isinstance(latest_run.get("observer_summary"), dict)
+            else {}
+        )
+        if observer_summary:
+            headline = str(observer_summary.get("headline") or "").strip()
+            alerts = observer_summary.get("alerts")
+            if headline:
+                run_summary.append(f"Focus: {headline}")
+            if isinstance(alerts, list) and alerts:
+                run_summary.append("Alerts: " + ", ".join(str(item) for item in alerts[:4]))
+        current_substep = str(latest_run.get("current_substep") or "").strip()
+        if current_substep:
+            run_summary.append(f"Substep: {current_substep}")
+        backend = str(latest_run.get("active_session_backend") or "").strip()
+        if backend:
+            run_summary.append(f"Backend: {backend}")
         if project.latest_summary:
             run_summary.append("")
             run_summary.append(project.latest_summary)
@@ -942,6 +1158,27 @@ def _build_studio_timeline(
             }
         )
 
+    for event in latest_run.get("supervisor_events", []):
+        if not isinstance(event, dict):
+            continue
+        summary = str(event.get("summary") or "").strip()
+        event_type = str(event.get("event_type") or "supervisor_event").strip()
+        if not summary and not event_type:
+            continue
+        alerts = event.get("alerts")
+        alert_text = ""
+        if isinstance(alerts, list) and alerts:
+            alert_text = " | alerts: " + ", ".join(str(item) for item in alerts[:4])
+        timeline.append(
+            {
+                "kind": "supervisor",
+                "title": event_type or "supervisor_event",
+                "description": (summary or event_type) + alert_text,
+                "timestamp": event.get("timestamp") or project.updated_at.isoformat(),
+                "status": str(event.get("status") or "running"),
+            }
+        )
+
     timeline.append(
         {
             "kind": "status",
@@ -953,3 +1190,47 @@ def _build_studio_timeline(
     )
 
     return timeline
+
+
+def _supervisor_canvas_nodes(
+    latest_run: dict[str, Any] | None,
+    *,
+    run_node_id: str,
+) -> list[dict[str, Any]]:
+    if not latest_run:
+        return []
+    events = latest_run.get("supervisor_events")
+    if not isinstance(events, list):
+        return []
+    nodes: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("event_type") or "supervisor_event").strip() or "supervisor_event"
+        stage_num = event.get("stage")
+        source = run_node_id
+        if isinstance(stage_num, int) and 1 <= stage_num <= 23:
+            source = f"stage:{stage_num:02d}"
+        summary = str(event.get("summary") or "").strip()
+        label = event_type.replace("_", " ").strip().title()
+        nodes.append(
+            {
+                "type": "supervisor",
+                "label": label,
+                "source": source,
+                "edge_kind": "supervisor",
+                "meta": {
+                    "event_type": event_type,
+                    "status": str(event.get("status") or "unknown"),
+                    "summary": summary,
+                    "timestamp": str(event.get("timestamp") or ""),
+                    "stage": stage_num,
+                    "stage_name": str(event.get("stage_name") or ""),
+                    "backend": str(event.get("backend") or ""),
+                    "substep": str(event.get("substep") or ""),
+                    "alerts": event.get("alerts") if isinstance(event.get("alerts"), list) else [],
+                    "waiting_reason": str(event.get("waiting_reason") or ""),
+                },
+            }
+        )
+    return nodes

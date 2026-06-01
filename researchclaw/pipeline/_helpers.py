@@ -6,7 +6,7 @@ import json
 import logging
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from researchclaw.config import RCConfig
+from researchclaw.experiment.validator import detect_non_code_response
 from researchclaw.hardware import HardwareProfile, is_metric_name
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline.research_governor import build_launch_mode_overlay
@@ -41,6 +42,7 @@ class StageResult:
     error: str | None = None
     decision: str = "proceed"
     evidence_refs: tuple[str, ...] = ()
+    control_hints: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -690,12 +692,18 @@ def _chat_with_prompt(
     for attempt in range(1 + retries):
         try:
             if json_mode and max_tokens is not None:
-                return llm.chat(messages, system=system, json_mode=True, max_tokens=max_tokens, strip_thinking=strip_thinking)
-            if json_mode:
-                return llm.chat(messages, system=system, json_mode=True, strip_thinking=strip_thinking)
-            if max_tokens is not None:
-                return llm.chat(messages, system=system, max_tokens=max_tokens, strip_thinking=strip_thinking)
-            return llm.chat(messages, system=system, strip_thinking=strip_thinking)
+                response = llm.chat(messages, system=system, json_mode=True, max_tokens=max_tokens, strip_thinking=strip_thinking)
+            elif json_mode:
+                response = llm.chat(messages, system=system, json_mode=True, strip_thinking=strip_thinking)
+            elif max_tokens is not None:
+                response = llm.chat(messages, system=system, max_tokens=max_tokens, strip_thinking=strip_thinking)
+            else:
+                response = llm.chat(messages, system=system, strip_thinking=strip_thinking)
+
+            non_code_reason = detect_non_code_response(getattr(response, "content", ""))
+            if non_code_reason:
+                raise RuntimeError(non_code_reason)
+            return response
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
             if attempt < retries:
@@ -971,6 +979,301 @@ def _normalize_named_list(value: Any, *, max_items: int = 8) -> list[str]:
     return deduped[:max_items]
 
 
+def _compact_markdown_context(
+    text: str,
+    *,
+    max_chars: int = 1600,
+    max_items: int = 10,
+) -> str:
+    """Convert a long markdown/text artifact into a short bullet digest."""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+
+    bullets: list[str] = []
+    seen: set[str] = set()
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", raw) if p.strip()]
+
+    def _push(item: str) -> None:
+        cleaned = re.sub(r"\s+", " ", item).strip(" -\t")
+        if not cleaned:
+            return
+        if len(cleaned) > 220:
+            cleaned = cleaned[:217].rstrip() + "..."
+        key = cleaned.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        bullets.append(cleaned)
+
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            _push("Section: " + re.sub(r"^#+\s*", "", stripped))
+            continue
+        if re.match(r"^[-*+]\s+", stripped):
+            _push(re.sub(r"^[-*+]\s+", "", stripped))
+            continue
+        if re.match(r"^\d+[.)]\s+", stripped):
+            _push(re.sub(r"^\d+[.)]\s+", "", stripped))
+            continue
+        if ":" in stripped and len(stripped.split(":", 1)[0]) <= 32:
+            _push(stripped)
+        if len(bullets) >= max_items:
+            break
+
+    if len(bullets) < max_items:
+        for paragraph in paragraphs:
+            _push(paragraph)
+            if len(bullets) >= max_items:
+                break
+
+    if not bullets:
+        compact = re.sub(r"\s+", " ", raw)
+        return compact[:max_chars].rstrip() + ("..." if len(compact) > max_chars else "")
+
+    lines: list[str] = []
+    total = 0
+    for item in bullets:
+        line = f"- {item}"
+        projected = total + len(line) + 1
+        if projected > max_chars and lines:
+            break
+        if projected > max_chars:
+            line = line[: max(0, max_chars - total - 4)].rstrip() + "..."
+        lines.append(line)
+        total += len(line) + 1
+    return "\n".join(lines)
+
+
+def _split_markdown_sections(text: str) -> list[tuple[str, str]]:
+    """Split markdown into heading/body sections while preserving order."""
+    raw = (text or "").strip()
+    if not raw:
+        return []
+
+    sections: list[tuple[str, str]] = []
+    current_heading = ""
+    current_lines: list[str] = []
+    for line in raw.splitlines():
+        heading_match = re.match(r"^\s{0,3}#{1,6}\s+(.*?)\s*$", line)
+        if heading_match:
+            if current_heading or current_lines:
+                sections.append((current_heading, "\n".join(current_lines).strip()))
+            current_heading = heading_match.group(1).strip()
+            current_lines = []
+            continue
+        current_lines.append(line)
+    if current_heading or current_lines:
+        sections.append((current_heading, "\n".join(current_lines).strip()))
+    return sections
+
+
+def _normalize_heading_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def _build_priority_markdown_excerpt(
+    text: str,
+    *,
+    preferred_headings: tuple[str, ...],
+    max_chars: int,
+) -> str:
+    """Keep semantically important sections before falling back to source order."""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+
+    sections = _split_markdown_sections(raw)
+    if not sections:
+        return raw[:max_chars].rstrip() + ("..." if len(raw) > max_chars else "")
+
+    ordered: list[tuple[str, str]] = []
+    selected_indexes: set[int] = set()
+    normalized_preferences = tuple(_normalize_heading_key(item) for item in preferred_headings)
+    for preferred in normalized_preferences:
+        if not preferred:
+            continue
+        for idx, (heading, body) in enumerate(sections):
+            normalized_heading = _normalize_heading_key(heading)
+            if idx in selected_indexes or not normalized_heading:
+                continue
+            if preferred in normalized_heading or normalized_heading in preferred:
+                ordered.append((heading, body))
+                selected_indexes.add(idx)
+                break
+    ordered.extend(
+        section for idx, section in enumerate(sections) if idx not in selected_indexes
+    )
+
+    rendered: list[str] = []
+    total = 0
+    for heading, body in ordered:
+        chunk = "\n".join(part for part in (f"### {heading}" if heading else "", body) if part).strip()
+        if not chunk:
+            continue
+        separator_len = 2 if rendered else 0
+        projected = total + separator_len + len(chunk)
+        if projected <= max_chars:
+            rendered.append(chunk)
+            total = projected
+            continue
+        remaining = max_chars - total - separator_len
+        if remaining > 120:
+            rendered.append(chunk[:remaining].rstrip() + "\n... [truncated]")
+        break
+    if rendered:
+        return "\n\n".join(rendered)
+    return raw[:max_chars].rstrip() + ("..." if len(raw) > max_chars else "")
+
+
+def _compress_instruction_block(text: str, *, max_chars: int = 5000) -> str:
+    """Deduplicate and cap long instruction bundles while preserving order."""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    chunks = [chunk.strip() for chunk in re.split(r"\n\s*\n", raw) if chunk.strip()]
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        key = re.sub(r"\s+", " ", chunk).strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(chunk)
+
+    kept: list[str] = []
+    total = 0
+    for chunk in deduped:
+        projected = total + len(chunk) + (2 if kept else 0)
+        if projected > max_chars:
+            remaining = max_chars - total - (2 if kept else 0)
+            if remaining > 160:
+                kept.append(chunk[:remaining].rstrip() + "\n... [truncated]")
+            break
+        kept.append(chunk)
+        total = projected
+    return "\n\n".join(kept)
+
+
+def _artifact_source_ref(run_dir: Path, artifact_name: str) -> str:
+    """Return a stable relative artifact reference for prompt handoffs."""
+    patterns = (
+        artifact_name,
+        f"stage-*/{artifact_name}",
+        f"stage-*/*/{artifact_name}",
+    )
+    for pattern in patterns:
+        matches = sorted(run_dir.glob(pattern))
+        if matches:
+            try:
+                return matches[0].relative_to(run_dir).as_posix()
+            except ValueError:
+                return matches[0].as_posix()
+    return artifact_name
+
+
+def _build_artifact_prompt_block(
+    run_dir: Path,
+    *,
+    title: str,
+    artifact_name: str,
+    text: str,
+    max_chars: int = 1200,
+    preferred_headings: tuple[str, ...] = (),
+) -> str:
+    excerpt = (
+        _build_priority_markdown_excerpt(
+            text,
+            preferred_headings=preferred_headings,
+            max_chars=max_chars,
+        )
+        if preferred_headings
+        else text
+    )
+    compact = _compact_markdown_context(excerpt, max_chars=max_chars, max_items=8)
+    lines = [
+        f"### {title}",
+        f"- Source artifact: `{_artifact_source_ref(run_dir, artifact_name)}`",
+        "- Use the source artifact on disk when exact wording or full detail is needed.",
+    ]
+    if compact:
+        lines.extend(["## Key Points", compact])
+    return "\n".join(lines)
+
+
+def _build_experiment_plan_summary(
+    exp_plan_text: str,
+    *,
+    run_dir: Path | None = None,
+    max_chars: int = 4700,
+) -> str:
+    """Build a compact execution-oriented summary of exp_plan.yaml."""
+    raw = (exp_plan_text or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        parsed = None
+
+    if not isinstance(parsed, dict):
+        ref = (
+            f"- Source artifact: `{_artifact_source_ref(run_dir, 'exp_plan.yaml')}`\n"
+            if run_dir is not None
+            else ""
+        )
+        compact = _compact_markdown_context(raw, max_chars=max_chars - len(ref), max_items=10)
+        return (
+            "# Experiment Plan Summary\n"
+            + ref
+            + "- Read the source artifact on disk for the full YAML plan.\n"
+            + compact
+        ).strip() + "\n"
+
+    lines = ["# Experiment Plan Summary"]
+    if run_dir is not None:
+        lines.append(f"- Source artifact: `{_artifact_source_ref(run_dir, 'exp_plan.yaml')}`")
+    lines.append("- Read the source artifact on disk for full YAML detail when needed.")
+
+    section_specs = [
+        ("Objectives", parsed.get("objectives"), 6),
+        ("Datasets", parsed.get("datasets"), 8),
+        ("Baselines", parsed.get("baselines"), 8),
+        ("Proposed Methods", parsed.get("proposed_methods"), 8),
+        ("Ablations", parsed.get("ablations"), 12),
+        ("Metrics", parsed.get("metrics"), 12),
+        ("Must-Run Experiments", parsed.get("must_run_experiments") or parsed.get("objectives"), 8),
+        ("Nice-To-Have Experiments", parsed.get("nice_to_have_experiments"), 6),
+        ("Stop Conditions", parsed.get("stop_conditions"), 6),
+    ]
+    for title, value, max_items in section_specs:
+        items = _normalize_named_list(value, max_items=max_items)
+        if not items:
+            continue
+        lines.append(f"\n## {title}")
+        lines.extend(f"- {item}" for item in items)
+
+    compute_budget = parsed.get("compute_budget")
+    if isinstance(compute_budget, dict) and compute_budget:
+        lines.append("\n## Compute Budget")
+        for key, value in compute_budget.items():
+            if isinstance(value, (str, int, float, bool)):
+                lines.append(f"- {key}: {value}")
+    elif compute_budget:
+        lines.append("\n## Compute Budget")
+        lines.extend(
+            f"- {item}" for item in _normalize_named_list(compute_budget, max_items=6)
+        )
+
+    summary = "\n".join(lines).strip() + "\n"
+    if len(summary) <= max_chars:
+        return summary
+    return summary[:max_chars].rstrip() + "\n... [truncated]\n"
+
+
 def _extract_hypothesis_claims(text: str, *, max_items: int = 3) -> list[str]:
     """Extract compact claim statements from hypothesis markdown."""
     claims: list[str] = []
@@ -1015,6 +1318,7 @@ def _build_context_preamble(
     config: RCConfig,
     run_dir: Path,
     *,
+    compact: bool = False,
     include_goal: bool = False,
     include_problem_anchor: bool = False,
     include_hypotheses: bool = False,
@@ -1025,57 +1329,230 @@ def _build_context_preamble(
     include_decision: bool = False,
     include_claims: bool = False,
     include_experiment_data: bool = False,
+    include_baseline_digest: bool = True,
+    include_baseline_briefing: bool = True,
+    include_startup_contract: bool = True,
 ) -> str:
     parts = [
         "## Research Context",
         f"**Topic**: {config.research.topic}",
         f"**Domains**: {', '.join(config.research.domains) if config.research.domains else 'general'}",
     ]
-    contract_block = _build_startup_contract_block(run_dir)
+    contract_block = _build_startup_contract_block(run_dir) if include_startup_contract else ""
     if contract_block:
         parts.append(contract_block)
+    scoping_handoff = _read_prior_artifact(run_dir, "scoping_handoff.md")
+    if scoping_handoff:
+        if compact:
+            parts.append(
+                "\n"
+                + _build_artifact_prompt_block(
+                    run_dir,
+                    title="Early-Stage Handoff",
+                    artifact_name="scoping_handoff.md",
+                    text=scoping_handoff,
+                    max_chars=900,
+                )
+            )
+        else:
+            parts.append(f"\n### Early-Stage Handoff\n{scoping_handoff[:2200]}")
     if include_goal:
-        goal = _read_prior_artifact(run_dir, "goal.md")
+        goal = _read_prior_artifact(run_dir, "goal_brief.md") or _read_prior_artifact(run_dir, "goal.md")
         if goal:
-            parts.append(f"\n### Goal\n{goal[:2200]}")
+            if compact:
+                artifact_name = "goal_brief.md" if _read_prior_artifact(run_dir, "goal_brief.md") else "goal.md"
+                parts.append(
+                    "\n"
+                    + _build_artifact_prompt_block(
+                        run_dir,
+                        title="Goal",
+                        artifact_name=artifact_name,
+                        text=goal,
+                        max_chars=850,
+                    )
+                )
+            else:
+                parts.append(f"\n### Goal\n{goal[:2200]}")
     if include_problem_anchor:
-        anchor = _read_prior_artifact(run_dir, "problem_anchor.md")
+        anchor = _read_prior_artifact(run_dir, "problem_anchor_brief.md") or _read_prior_artifact(run_dir, "problem_anchor.md")
         if anchor:
-            parts.append(f"\n### Problem Anchor\n{anchor[:2200]}")
+            if compact:
+                artifact_name = (
+                    "problem_anchor_brief.md"
+                    if _read_prior_artifact(run_dir, "problem_anchor_brief.md")
+                    else "problem_anchor.md"
+                )
+                parts.append(
+                    "\n"
+                    + _build_artifact_prompt_block(
+                        run_dir,
+                        title="Problem Anchor",
+                        artifact_name=artifact_name,
+                        text=anchor,
+                        max_chars=900,
+                    )
+                )
+            else:
+                parts.append(f"\n### Problem Anchor\n{anchor[:2200]}")
     if include_hypotheses:
         hyp = _read_prior_artifact(run_dir, "hypotheses.md")
         if hyp:
-            parts.append(f"\n### Hypotheses\n{hyp[:2200]}")
+            if compact:
+                parts.append(
+                    "\n"
+                    + _build_artifact_prompt_block(
+                        run_dir,
+                        title="Hypotheses",
+                        artifact_name="hypotheses.md",
+                        text=hyp,
+                        max_chars=1000,
+                    )
+                )
+            else:
+                parts.append(f"\n### Hypotheses\n{hyp[:2200]}")
     if include_synthesis:
         synthesis = _read_prior_artifact(run_dir, "synthesis.md")
         if synthesis:
-            parts.append(f"\n### Synthesis\n{synthesis[:2200]}")
+            if compact:
+                parts.append(
+                    "\n"
+                    + _build_artifact_prompt_block(
+                        run_dir,
+                        title="Synthesis",
+                        artifact_name="synthesis.md",
+                        text=synthesis,
+                        max_chars=1000,
+                    )
+                )
+            else:
+                parts.append(f"\n### Synthesis\n{synthesis[:2200]}")
     if include_exp_plan:
         plan = _read_prior_artifact(run_dir, "exp_plan.yaml")
         if plan:
-            parts.append(f"\n### Experiment Plan\n{plan[:2000]}")
+            if compact:
+                parts.append("\n" + _build_experiment_plan_summary(plan, run_dir=run_dir, max_chars=1800))
+            else:
+                parts.append(f"\n### Experiment Plan\n{plan[:2000]}")
     if include_claim_matrix:
         claim_matrix = _read_prior_artifact(run_dir, "claims_evidence_matrix.md")
         if claim_matrix:
-            parts.append(f"\n### Claims-Evidence Matrix\n{claim_matrix[:2400]}")
+            if compact:
+                parts.append(
+                    "\n"
+                    + _build_artifact_prompt_block(
+                        run_dir,
+                        title="Claims-Evidence Matrix",
+                        artifact_name="claims_evidence_matrix.md",
+                        text=claim_matrix,
+                        max_chars=1100,
+                    )
+                )
+            else:
+                parts.append(f"\n### Claims-Evidence Matrix\n{claim_matrix[:2400]}")
     if include_analysis:
         analysis = _read_best_analysis(run_dir)
         if analysis:
-            parts.append(f"\n### Result Analysis\n{analysis[:2500]}")
+            if compact:
+                parts.append(
+                    "\n"
+                    + _build_artifact_prompt_block(
+                        run_dir,
+                        title="Result Analysis",
+                        artifact_name="analysis.md",
+                        text=analysis,
+                        max_chars=1100,
+                    )
+                )
+            else:
+                parts.append(f"\n### Result Analysis\n{analysis[:2500]}")
     if include_decision:
         decision = _read_prior_artifact(run_dir, "decision.md")
         if decision:
-            parts.append(f"\n### Research Decision\n{decision[:1500]}")
+            if compact:
+                parts.append(
+                    "\n"
+                    + _build_artifact_prompt_block(
+                        run_dir,
+                        title="Research Decision",
+                        artifact_name="decision.md",
+                        text=decision,
+                        max_chars=800,
+                    )
+                )
+            else:
+                parts.append(f"\n### Research Decision\n{decision[:1500]}")
     if include_claims:
         claims = _read_prior_artifact(run_dir, "claims_from_results.md")
         if claims:
-            parts.append(f"\n### Claims From Results\n{claims[:2200]}")
+            if compact:
+                parts.append(
+                    "\n"
+                    + _build_artifact_prompt_block(
+                        run_dir,
+                        title="Claims From Results",
+                        artifact_name="claims_from_results.md",
+                        text=claims,
+                        max_chars=1000,
+                    )
+                )
+            else:
+                parts.append(f"\n### Claims From Results\n{claims[:2200]}")
     phase1_handoff = _read_prior_artifact(run_dir, "phase1_handoff.md")
     if phase1_handoff:
-        parts.append(f"\n### Phase 1 Handoff\n{phase1_handoff[:1800]}")
+        if compact:
+            parts.append(
+                "\n"
+                + _build_artifact_prompt_block(
+                    run_dir,
+                    title="Phase 1 Handoff",
+                    artifact_name="phase1_handoff.md",
+                    text=phase1_handoff,
+                    max_chars=800,
+                    preferred_headings=("decision", "next actions", "open questions"),
+                )
+            )
+        else:
+            parts.append(
+                "\n### Phase 1 Handoff\n"
+                + _build_priority_markdown_excerpt(
+                    phase1_handoff,
+                    preferred_headings=("decision", "next actions", "open questions"),
+                    max_chars=1800,
+                )
+            )
     phase2_handoff = _read_prior_artifact(run_dir, "phase2_handoff.md")
     if phase2_handoff:
-        parts.append(f"\n### Phase 2 Handoff\n{phase2_handoff[:1800]}")
+        if compact:
+            parts.append(
+                "\n"
+                + _build_artifact_prompt_block(
+                    run_dir,
+                    title="Phase 2 Handoff",
+                    artifact_name="phase2_handoff.md",
+                    text=phase2_handoff,
+                    max_chars=800,
+                    preferred_headings=(
+                        "exact missing experiments",
+                        "missing evidence",
+                        "paper positioning guidance",
+                        "decision",
+                    ),
+                )
+            )
+        else:
+            parts.append(
+                "\n### Phase 2 Handoff\n"
+                + _build_priority_markdown_excerpt(
+                    phase2_handoff,
+                    preferred_headings=(
+                        "exact missing experiments",
+                        "missing evidence",
+                        "paper positioning guidance",
+                        "decision",
+                    ),
+                    max_chars=1800,
+                )
+            )
     if include_experiment_data:
         experiment_log = _read_prior_artifact(run_dir, "experiment_log.md")
         if experiment_log:
@@ -1104,14 +1581,36 @@ def _build_context_preamble(
                     )
     brief_text = _load_baseline_briefing(config)
     baseline_digest = _read_prior_artifact(run_dir, "baseline_digest.md")
-    if baseline_digest:
-        parts.append(f"\n### Baseline Digest\n{baseline_digest[:2200]}")
-    if brief_text:
-        parts.append(f"\n### Baseline Briefing\n{brief_text}")
+    if include_baseline_digest and baseline_digest:
+        if compact:
+            parts.append(
+                "\n"
+                + _build_artifact_prompt_block(
+                    run_dir,
+                    title="Baseline Digest",
+                    artifact_name="baseline_digest.md",
+                    text=baseline_digest,
+                    max_chars=1000,
+                )
+            )
+        else:
+            parts.append(f"\n### Baseline Digest\n{baseline_digest[:2200]}")
+    if include_baseline_briefing and brief_text:
+        if compact:
+            parts.append(
+                "\n### Baseline Briefing\n"
+                f"- Source artifact: `{getattr(config.research, 'baseline_brief', '')}`\n"
+                "- Use the source artifact on disk for full detail.\n"
+                + _compact_markdown_context(brief_text, max_chars=1000, max_items=8)
+            )
+        else:
+            parts.append(f"\n### Baseline Briefing\n{brief_text}")
     return "\n".join(parts)
 
 
-def _load_startup_contract(run_dir: Path) -> dict[str, Any]:
+def _load_startup_contract(run_dir: Path | None) -> dict[str, Any]:
+    if run_dir is None:
+        return {}
     candidates = [run_dir / "startup_contract.json"]
     if run_dir.parent.name == "artifacts":
         candidates.append(run_dir.parent.parent / "startup_contract.json")
@@ -1127,7 +1626,13 @@ def _load_startup_contract(run_dir: Path) -> dict[str, Any]:
     return {}
 
 
-def _build_startup_contract_block(run_dir: Path, *, stage_name: str = "context") -> str:
+def _build_startup_contract_block(
+    run_dir: Path | None,
+    *,
+    stage_name: str = "context",
+) -> str:
+    if run_dir is None:
+        return ""
     startup_contract = _load_startup_contract(run_dir)
     launch_mode = str(
         startup_contract.get("launch_mode")
@@ -1210,6 +1715,14 @@ def _detect_runtime_issues(sandbox_result: Any) -> str:
     Returns a formatted string describing all runtime issues, or empty string
     if no issues are found.
     """
+    benign_stderr_patterns = (
+        re.compile(r"unauthenticated requests to the HF Hub", re.IGNORECASE),
+        re.compile(r"Please set a HF_TOKEN to enable higher rate limits", re.IGNORECASE),
+    )
+
+    def _is_benign_stderr_line(line: str) -> bool:
+        return any(pattern.search(line) for pattern in benign_stderr_patterns)
+
     issues: list[str] = []
 
     # Check metrics for NaN/Inf
@@ -1245,6 +1758,8 @@ def _detect_runtime_issues(sandbox_result: Any) -> str:
         for line in stderr.splitlines():
             line_stripped = line.strip()
             if not line_stripped:
+                continue
+            if _is_benign_stderr_line(line_stripped):
                 continue
             # Keep RuntimeWarning, ValueError, ZeroDivisionError, etc.
             if any(
@@ -1291,7 +1806,23 @@ def _detect_runtime_issues(sandbox_result: Any) -> str:
             metric_suffix = name.split()[-1] if name.split() else name
             metric_values_by_name.setdefault(metric_suffix, []).append(fval)
 
+        expected_discrete_metrics = {
+            "average_active_rank",
+            "final_average_rank",
+            "rank_path_length",
+            "rank_volatility",
+            "num_probe_events",
+            "num_trigger_events",
+            "mechanism.average_active_rank_mean",
+            "mechanism.final_average_rank_mean",
+            "mechanism.rank_path_length_mean",
+            "mechanism.rank_volatility_mean",
+            "mechanism.num_probe_events_mean",
+            "mechanism.num_trigger_events_mean",
+        }
         for metric_name, vals in metric_values_by_name.items():
+            if metric_name in expected_discrete_metrics:
+                continue
             if len(vals) >= 3:
                 unique = set(vals)
                 if len(unique) <= 2:

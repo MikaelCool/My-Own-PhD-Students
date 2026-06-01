@@ -5,7 +5,7 @@ parses the log for common errors, applies automated fixes, and retries
 up to 3 times.  Designed to run inside ``_package_deliverables()`` so
 that the final paper.tex in ``deliverables/`` is compile-tested.
 
-If pdflatex is not installed the module gracefully returns a failure
+If no supported LaTeX engine is installed the module gracefully returns a failure
 report without raising.
 """
 
@@ -20,6 +20,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def _available_latex_engine() -> str | None:
+    if shutil.which("pdflatex"):
+        return "pdflatex"
+    if shutil.which("tectonic"):
+        return "tectonic"
+    return None
 
 # BUG-201: Cyrillic → Latin transliteration for author names from Semantic Scholar.
 # pdflatex without T2A font encoding chokes on Cyrillic (e.g. "А. И. Колесников").
@@ -74,11 +82,12 @@ def compile_latex(
     CompileResult
         Contains success flag, log excerpt, errors found, and fixes applied.
     """
-    if not shutil.which("pdflatex"):
+    engine = _available_latex_engine()
+    if engine is None:
         return CompileResult(
             success=False,
-            log_excerpt="pdflatex not found on PATH",
-            errors=["pdflatex not installed"],
+            log_excerpt="No supported LaTeX engine found on PATH (pdflatex/tectonic)",
+            errors=["latex engine not installed"],
         )
 
     result = CompileResult(success=False)
@@ -102,25 +111,33 @@ def compile_latex(
     for attempt in range(1, max_attempts + 1):
         result.attempts = attempt
 
-        # --- Full 3-pass compilation: pdflatex → bibtex → pdflatex × 2 ---
-        # Pass 1: generate .aux (needed by bibtex). Use nonstopmode (NOT
-        # halt-on-error) so .aux is written even when there are non-fatal
-        # errors like missing figures or overfull hboxes.
-        log_text, pass1_ok = _run_pdflatex(work_dir, tex_name, timeout)
-        if log_text is None:
-            result.errors.append(f"pdflatex failed on pass 1 (attempt {attempt})")
-            break
+        if engine == "tectonic":
+            log_text, compile_ok = _run_tectonic(work_dir, tex_name, timeout)
+            if log_text is None:
+                result.errors.append(f"tectonic failed on attempt {attempt}")
+                break
+            if not compile_ok:
+                result.errors.append(f"tectonic compile failed on attempt {attempt}")
+        else:
+            # --- Full 3-pass compilation: pdflatex → bibtex → pdflatex × 2 ---
+            # Pass 1: generate .aux (needed by bibtex). Use nonstopmode (NOT
+            # halt-on-error) so .aux is written even when there are non-fatal
+            # errors like missing figures or overfull hboxes.
+            log_text, pass1_ok = _run_pdflatex(work_dir, tex_name, timeout)
+            if log_text is None:
+                result.errors.append(f"pdflatex failed on pass 1 (attempt {attempt})")
+                break
 
-        # BibTeX: always run after pass 1 — it only needs .aux + .bib.
-        # Previously gated behind pass1 success, which meant citations were
-        # always [?] when the first pass had non-fatal errors.
-        _run_bibtex(work_dir, bib_stem, timeout=60)
+            # BibTeX: always run after pass 1 — it only needs .aux + .bib.
+            # Previously gated behind pass1 success, which meant citations were
+            # always [?] when the first pass had non-fatal errors.
+            _run_bibtex(work_dir, bib_stem, timeout=60)
 
-        # Passes 2-3: resolve cross-references and bibliography
-        for _pass in (2, 3):
-            pass_log, _ = _run_pdflatex(work_dir, tex_name, timeout)
-            if pass_log is not None:
-                log_text = pass_log  # keep final pass log for error analysis
+            # Passes 2-3: resolve cross-references and bibliography
+            for _pass in (2, 3):
+                pass_log, _ = _run_pdflatex(work_dir, tex_name, timeout)
+                if pass_log is not None:
+                    log_text = pass_log  # keep final pass log for error analysis
 
         # Parse the final log for errors/warnings
         errors, warnings = _parse_log(log_text)
@@ -767,6 +784,34 @@ def _run_pdflatex(
         )
     except subprocess.TimeoutExpired:
         logger.warning("pdflatex timed out after %ds", timeout)
+        return None, False
+    except FileNotFoundError:
+        return None, False
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    stderr = proc.stderr.decode("utf-8", errors="replace")
+    log_text = stdout + "\n" + stderr
+    return log_text, proc.returncode == 0
+
+
+def _run_tectonic(
+    work_dir: Path,
+    tex_name: str,
+    timeout: int = 120,
+) -> tuple[str | None, bool]:
+    """Run a single Tectonic compile pass.
+
+    Tectonic resolves bibliography/cross-references internally, so we only
+    need one compile invocation for local PDF export.
+    """
+    try:
+        proc = subprocess.run(
+            ["tectonic", "--keep-logs", "--keep-intermediates", tex_name],
+            cwd=work_dir,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("tectonic timed out after %ds", timeout)
         return None, False
     except FileNotFoundError:
         return None, False

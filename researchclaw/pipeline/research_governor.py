@@ -7,6 +7,7 @@ from typing import Any
 
 from researchclaw.assessor.venue_profiles import VenueProfile, get_venue_profile
 from researchclaw.config import RCConfig
+from researchclaw.metaclaw_bridge.stage_skill_map import summarize_stage_policy
 from researchclaw.skills.registry import SkillRegistry
 
 
@@ -158,25 +159,44 @@ def build_stage_skill_overlay(
     *,
     stage_name: str,
     context: str,
+    max_chars: int = 2400,
 ) -> str:
     if not getattr(config.skills, "enabled", True):
         return ""
     try:
+        extra_skill_dirs: list[str] = list(config.skills.external_dirs)
+        bridge = getattr(config, "metaclaw_bridge", None)
+        if bridge and getattr(bridge, "enabled", False):
+            bridge_root = Path(getattr(bridge, "skills_dir", "")).expanduser()
+            if str(bridge_root) and str(bridge_root) not in extra_skill_dirs:
+                extra_skill_dirs.append(str(bridge_root))
+            trial_dir = bridge_root / ".trials"
+            if trial_dir.exists() and str(trial_dir) not in extra_skill_dirs:
+                extra_skill_dirs.append(str(trial_dir))
         registry = SkillRegistry(
             builtin_dir=config.skills.builtin_dir,
             custom_dirs=config.skills.custom_dirs,
-            external_dirs=config.skills.external_dirs,
+            external_dirs=extra_skill_dirs,
             auto_match=config.skills.auto_match,
             max_skills_per_stage=config.skills.max_skills_per_stage,
             fallback_matching=config.skills.fallback_matching,
         )
-        matched = registry.match(context, stage_name)
-        if not matched:
+        bundle = registry.resolve_bundle(context, stage_name)
+        matched = bundle.get("selected", [])
+        rejected = bundle.get("rejected", [])
+        if not isinstance(matched, list) or not matched:
             return ""
-        exported = registry.export_for_prompt(matched, max_chars=2400)
+        exported = registry.export_for_prompt(matched, max_chars=max_chars)
         if not exported.strip():
             return ""
-        return f"## Active Skills\n{exported}\n"
+        policy = summarize_stage_policy(stage_name)
+        rationale = registry.describe_bundle(
+            matched,
+            rejected=rejected if isinstance(rejected, list) else None,
+            max_chars=min(1200, max_chars // 2),
+        )
+        parts = [policy.strip(), rationale.strip(), "## Active Skills", exported.strip()]
+        return "\n\n".join(part for part in parts if part) + "\n"
     except Exception:
         return ""
 

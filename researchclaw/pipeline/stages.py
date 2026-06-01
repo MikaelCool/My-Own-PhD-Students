@@ -74,6 +74,18 @@ class StageStatus(str, Enum):
     DONE = "done"
 
 
+class ControlAction(str, Enum):
+    PROCEED = "proceed"
+    RETRY_SAME_STEP = "retry_same_step"
+    REPAIR_LOCAL_BLOCK = "repair_local_block"
+    SWITCH_SESSION_BACKEND = "switch_session_backend"
+    WAIT_FOR_RESOURCE = "wait_for_resource"
+    REQUEST_HUMAN_GATE = "request_human_gate"
+    ROLLBACK_TO_STAGE = "rollback_to_stage"
+    PIVOT_HYPOTHESIS = "pivot_hypothesis"
+    TERMINATE_RUN = "terminate_run"
+
+
 class TransitionEvent(str, Enum):
     START = "start"
     SUCCEED = "succeed"
@@ -130,7 +142,7 @@ DECISION_ROLLBACK: dict[str, Stage] = {
     "refine": Stage.ITERATIVE_REFINE,    # Keep hypotheses, re-run experiments
 }
 
-MAX_DECISION_PIVOTS: int = 2  # Prevent infinite loops
+MAX_DECISION_PIVOTS: int = 6  # Stop after six refine/pivot cycles
 
 # ---------------------------------------------------------------------------
 # Noncritical stages — can be skipped on failure without aborting pipeline

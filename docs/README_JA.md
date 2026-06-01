@@ -64,7 +64,6 @@
 
 ## 馃敟 News
 - **[03/22/2026]** [v0.3.2](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.2) 鈥?**銈儹銈广儣銉┿儍銉堛儠銈┿兗銉犲蹇?+ 瀹夊畾鎬уぇ骞呭悜涓?* 鈥?ACP浜掓彌AI銈ㄣ兗銈搞偋銉炽儓銉愩儍銈偍銉炽儔锛圕laude Code銆丆odex CLI銆丆opilot CLI銆丟emini CLI銆並imi CLI锛夈伀瀵惧繙銇椼€丱penClaw銉栥儶銉冦偢绲岀敱銇с儭銉冦偦銉笺偢銉炽偘銉椼儵銉冦儓銉曘偐銉笺儬锛圖iscord銆乀elegram銆丩ark銆乄eChat锛夈倐銈点儩銉笺儓銆傛柊銇椼亜CLI銈ㄣ兗銈搞偋銉炽儓銈炽兗銉夌敓鎴愩儛銉冦偗銈ㄣ兂銉夈伀銈堛倞銆併偣銉嗐兗銈?0銇?3銈掑閮–LI銈ㄣ兗銈搞偋銉炽儓銇浠汇仐銆佷簣绠楀埗寰°仺銈裤偆銉犮偄銈︺儓绠＄悊銇蹇溿€傚弽銉囥兗銈挎崗閫犮偡銈广儐銉狅紙VerifiedRegistry + 瀹熼〒瑷烘柇銉讳慨寰┿儷銉笺儣锛夈€?00浠朵互涓娿伄銉愩偘淇銆併儮銈搞儱銉┿兗executor銉儠銈°偗銈裤儶銉炽偘銆乣--resume`鑷嫊妞滃嚭銆丩LM銉儓銉┿偆寮峰寲銆併偝銉熴儱銉嬨儐銈ｅ牨鍛娿伄淇銈掑惈銈€銆?
-- **[03/18/2026]** [v0.3.1](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.1) 鈥?**OpenCode Beast Mode + Community Contributions** 鈥?New "Beast Mode" routes complex code generation to [OpenCode](https://github.com/anomalyco/opencode) with automatic complexity scoring and graceful fallback. Added Novita AI provider support, thread-safety hardening, improved LLM output parsing robustness, and 20+ bug fixes from community PRs and internal audit.
 - **[03/17/2026]** [v0.3.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.0) 鈥?**MetaClaw Integration** 鈥?AutoResearchClaw now supports [MetaClaw](https://github.com/aiming-lab/MetaClaw) cross-run learning: pipeline failures 鈫?structured lessons 鈫?reusable skills, injected into all 23 stages. **+18.3%** robustness in controlled experiments. Opt-in (`metaclaw_bridge.enabled: true`), fully backward-compatible. See [Integration Guide](#-metaclaw-integration).
 - **[03/16/2026]** [v0.2.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.2.0) 鈥?Three multi-agent subsystems (CodeAgent, BenchmarkAgent, FigureAgent), hardened Docker sandbox with network-policy-aware execution, 4-round paper quality audit (AI-slop detection, 7-dim review scoring, NeurIPS checklist), and 15+ bug fixes from production runs.
 - **[03/15/2026]** [v0.1.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.1.0) 鈥?We release AutoResearchClaw: a fully autonomous 23-stage research pipeline that turns a single research idea into a conference-ready paper. No human intervention required.
@@ -113,7 +112,6 @@ cd My-Own-PhD-Students
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-# 2. 銈汇儍銉堛偄銉冦儣锛堝瑭卞紡 鈥?OpenCode Beast Mode銇偆銉炽偣銉堛兗銉€丏ocker/LaTeX銇⒑瑾嶏級
 researchclaw setup
 
 # 3. 瑷畾
@@ -227,7 +225,6 @@ AutoResearchClaw銇?*浠绘剰銇瓵CP浜掓彌銈炽兗銉囥偅銉炽偘銈ㄣ
 | Codex CLI | `codex` | OpenAI |
 | Copilot CLI | `gh` | GitHub |
 | Gemini CLI | `gemini` | Google |
-| OpenCode | `opencode` | SST |
 | Kimi CLI | `kimi` | Moonshot |
 
 ```yaml
@@ -253,7 +250,6 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 | **Python API** | `from researchclaw.pipeline import Runner; Runner(config).run()` |
 | **Claude Code** | `RESEARCHCLAW_CLAUDE.md`銈掕銇垮彇銈?鈥?*銆孯un research on [銉堛償銉冦偗]銆?銇ㄨ█銇嗐仩銇?|
 | **Copilot CLI** | `researchclaw run --topic "..."` 銇?`llm.acp.agent: "gh"` 銈掍娇鐢?|
-| **OpenCode** | `.claude/skills/`銈掕銇垮彇銈?鈥?鍚屻仒鑷劧瑷€瑾炪偆銉炽偪銉笺儠銈с兗銈?|
 | **浠绘剰銇瓵I CLI** | `RESEARCHCLAW_AGENTS.md`銈掋偝銉炽儐銈偣銉堛仺銇椼仸鎻愪緵 鈫?銈ㄣ兗銈搞偋銉炽儓銇岃嚜鍕曘儢銉笺儓銈广儓銉┿儍銉?|
 
 ---
@@ -312,7 +308,6 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 | **馃摎 銉炪儷銉併偨銉笺偣鏂囩尞** | OpenAlex銆丼emantic Scholar銆乤rXiv銇嬨倝銇疅闅涖伄璜栨枃 鈥?銈偍銉嫛寮点€侀噸瑜囨帓闄ゃ€佷笁鐘舵厠銈点兗銈儍銉堛儢銉兗銈兗銇ㄣ偘銉兗銈广儠銉儑銈般儵銉囥兗銈枫儳銉?|
 | **馃攳 4灞ゅ紩鐢ㄦ瑷?* | arXiv ID銉併偋銉冦偗 鈫?CrossRef/DataCite DOI 鈫?Semantic Scholar銈裤偆銉堛儷銉炪儍銉?鈫?LLM闁㈤€ｆ€с偣銈炽偄銉兂銈般€傚够瑕氥仌銈屻仧鍙傝€冩枃鐚伅鑷嫊鍓婇櫎銆?|
 | **馃枼锔?銉忋兗銉夈偊銈с偄瀵惧繙瀹熻** | GPU锛圢VIDIA CUDA / Apple MPS / CPU銇伩锛夈倰鑷嫊妞滃嚭銇椼€併偝銉笺儔鐢熸垚銆併偆銉炽儩銉笺儓銆佸疅楱撱偣銈便兗銉倰閬╁繙 |
-| **馃 OpenCode Beast Mode** | 瑜囬洃銇疅楱撱倰鑷嫊鐨勩伀[OpenCode](https://github.com/anomalyco/opencode)銇儷銉笺儐銈ｃ兂銈?鈥?銈偣銈裤儬銈兗銈儐銈儊銉ｃ€併儓銉兗銉嬨兂銈般儷銉笺儣銆併偄銉栥儸銉笺偡銉с兂鐮旂┒銈掑惈銈€銉炪儷銉併儠銈°偆銉儣銉偢銈с偗銉堛倰鐢熸垚銆俙researchclaw setup`銇с偆銉炽偣銉堛兗銉€?|
 | **馃И 銈点兂銉夈儨銉冦偗銈瑰疅楱?* | AST妞滆娓堛伩銈炽兗銉夈€佷笉澶夈儚銉笺儘銈广€丯aN/Inf鏃╂湡鍋滄銆佽嚜宸变慨寰┿€佸弽寰╃殑鏀硅壇锛堟渶澶?0銉┿偊銉炽儔锛夈€侀儴鍒嗙祼鏋溿伄淇濇寔 |
 | **馃摑 瀛︿細銈般儸銉笺儔鍩风瓎** | NeurIPS/ICML/ICLR銉嗐兂銉椼儸銉笺儓銆併偦銈偡銉с兂鍒ャ儔銉┿儠銉堬紙5,000銆?,500瑾烇級銆佹崗閫犻槻姝偓銉笺儔銆佹敼瑷傛枃瀛楁暟銈兗銉夈€佸厤璨簨闋呮姂鍒?|
 | **馃搻 銉嗐兂銉椼儸銉笺儓鍒囥倞鏇裤亪** | `neurips_2025`銆乣iclr_2026`銆乣icml_2026` 鈥?Markdown 鈫?LaTeX锛堟暟寮忋€佽〃銆佸洺銆佺浉浜掑弬鐓с€乣\cite{}`瀵惧繙锛?|
@@ -451,12 +446,10 @@ experiment:
     host: ""                       # GPU銈点兗銉愩兗銇儧銈广儓鍚?
     gpu_ids: []                    # 鍒╃敤鍙兘銇狦PU ID
     remote_workdir: "/tmp/researchclaw_experiments"
-  opencode:                          # OpenCode Beast Mode锛坄researchclaw setup`銇ц嚜鍕曘偆銉炽偣銉堛兗銉級
     enabled: true                    # 銉炪偣銈裤兗銈广偆銉冦儊锛堛儑銉曘偐銉儓: true锛?
     auto: true                       # 纰鸿獚銇仐銇ц嚜鍕曘儓銉偓銉硷紙銉囥儠銈┿儷銉? true锛?
     complexity_threshold: 0.2        # 0.0-1.0 鈥?楂樸亜 = 瑜囬洃銇疅楱撱伄銇裤儓銉偓銉?
     model: ""                        # 銉儑銉伄銈兗銉愩兗銉┿偆銉夛紙绌?= llm.primary_model銈掍娇鐢級
-    timeout_sec: 600                 # OpenCode鐢熸垚銇渶澶х鏁?
     max_retries: 1                   # 澶辨晽鏅傘伄銉儓銉┿偆鍥炴暟
     workspace_cleanup: true          # 鍙庨泦寰屻伀涓€鏅傘儻銉笺偗銈广儦銉笺偣銈掑墛闄?
 

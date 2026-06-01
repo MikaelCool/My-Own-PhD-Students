@@ -181,7 +181,6 @@ experiment:
   repair:                            # Anti-fabrication experiment repair
     enabled: true                    # Diagnose and fix failed experiments before paper writing
     max_cycles: 3                    # Repair retry loops
-  opencode:                          # OpenCode Beast Mode (see README for details)
     enabled: true
 ```
 
@@ -239,7 +238,6 @@ researchclaw run --config config.yaml --topic "Transformer attention for time se
 
 | Command | What It Does |
 |---------|-------------|
-| `researchclaw setup` | Interactive first-time setup (installs OpenCode Beast Mode, checks Docker/LaTeX) |
 | `researchclaw init` | Interactive config creation (choose LLM provider, creates `config.arc.yaml`) |
 | `researchclaw run` | Run the full 23-stage pipeline |
 | `researchclaw validate` | Check your config file for errors |
@@ -740,9 +738,7 @@ Prerequisites:
 2. Install the Copilot extension: `gh extension install github/gh-copilot`
 3. Authenticate: `gh auth login`
 
-### OpenCode
 
-OpenCode loads skills from `.claude/skills/`. The `researchclaw` skill activates on research-related queries and guides the agent through the pipeline.
 
 ### Any AI CLI
 

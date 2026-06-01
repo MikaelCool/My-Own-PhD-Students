@@ -207,6 +207,26 @@ class TestFromExperiment:
         assert reg.primary_metric == pytest.approx(82.5)
         assert reg.primary_metric_std == pytest.approx(3.5355)
 
+    def test_primary_metric_prefers_best_condition_summary(self):
+        summary = self._make_summary()
+        summary["best_run"]["metrics"]["primary_metric"] = 0.220636
+        summary["condition_summaries"] = {
+            "exact_svd_oracle_controller": {
+                "metrics": {
+                    "primary_metric_mean": 0.182022,
+                    "primary_metric_std": 0.001,
+                }
+            },
+            "falcon_qb_activation_rank": {
+                "metrics": {"primary_metric_mean": 0.189296}
+            },
+        }
+
+        reg = VerifiedRegistry.from_experiment(summary, metric_direction="minimize")
+
+        assert reg.primary_metric == pytest.approx(0.182022)
+        assert reg.primary_metric_std == pytest.approx(0.001)
+
     def test_all_values_registered(self):
         reg = VerifiedRegistry.from_experiment(self._make_summary())
         # Core values must be verified

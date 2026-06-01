@@ -1,4 +1,5 @@
 const DEFAULT_LANGUAGE = "zh-CN";
+const SELECTED_PROJECT_STORAGE_KEY = "rc_selected_project_id";
 
 const I18N = {
   "zh-CN": {
@@ -83,6 +84,14 @@ const I18N = {
     settings_automation: "自动化",
     contract_section: "项目合同",
     latest_run: "最新运行",
+    observer_focus: "当前焦点",
+    observer_alerts: "风险提示",
+    current_substep: "当前子步骤",
+    current_action: "当前动作",
+    active_backend: "会话后端",
+    waiting_reason: "等待原因",
+    supervisor_events: "监督事件",
+    no_supervisor_events: "还没有监督事件。",
     metrics: "指标",
     goal: "目标",
     key_artifacts: "关键工件",
@@ -191,6 +200,7 @@ const I18N = {
     type_review: "评审",
     type_quality: "质量",
     type_deliverable: "交付物",
+    type_supervisor: "监督",
     type_contract: "合同",
     type_objective: "目标",
     type_baseline: "基线",
@@ -297,6 +307,14 @@ const I18N = {
     settings_automation: "Automation",
     contract_section: "Startup contract",
     latest_run: "Latest run",
+    observer_focus: "Current focus",
+    observer_alerts: "Alerts",
+    current_substep: "Substep",
+    current_action: "Control action",
+    active_backend: "Session backend",
+    waiting_reason: "Waiting reason",
+    supervisor_events: "Supervisor events",
+    no_supervisor_events: "No supervisor events yet.",
     metrics: "Metrics",
     goal: "Goal",
     key_artifacts: "Key artifacts",
@@ -405,6 +423,7 @@ const I18N = {
     type_review: "Review",
     type_quality: "Quality",
     type_deliverable: "Deliverable",
+    type_supervisor: "Supervisor",
     type_contract: "Contract",
     type_objective: "Objective",
     type_baseline: "Baseline",
@@ -433,7 +452,7 @@ const I18N = {
 
 const state = {
   projects: [],
-  selectedProjectId: null,
+  selectedProjectId: window.localStorage.getItem(SELECTED_PROJECT_STORAGE_KEY),
   selectedProject: null,
   details: null,
   canvas: null,
@@ -665,11 +684,14 @@ function renderSummaryStrip() {
   }
 
   const latestRun = state.details?.latest_run || {};
+  const observerSummary = state.details?.observer_summary || latestRun.observer_summary || {};
   const cards = [
     [t("summary_status"), translateStatus(state.selectedProject.status || "idle")],
     [t("summary_launch_mode"), launchModeLabel(state.selectedProject.launch_mode)],
     [t("summary_stage"), latestRun.current_stage_name || `${latestRun.current_stage || 0}/23`],
     [t("summary_run"), latestRun.run_id || t("not_set")],
+    [t("observer_focus"), observerSummary.headline || latestRun.waiting_reason || t("not_set")],
+    [t("active_backend"), latestRun.active_session_backend || t("not_set")],
   ];
 
   els.summaryStrip.innerHTML = cards
@@ -707,6 +729,8 @@ function renderDetails() {
   const project = details.project || {};
   const contract = details.startup_contract || {};
   const latestRun = details.latest_run || {};
+  const observerSummary = details.observer_summary || latestRun.observer_summary || {};
+  const supervisorEvents = details.supervisor_events || latestRun.supervisor_events || [];
   const metrics = latestRun.metrics || {};
   const keyArtifacts = details.key_artifacts || [];
   const workspaceFiles = details.workspace_files || [];
@@ -746,7 +770,20 @@ function renderDetails() {
               [t("summary_status"), translateStatus(latestRun.status || project.status)],
               [t("summary_stage"), latestRun.current_stage_name || latestRun.current_stage || 0],
               [t("start_time"), formatDateTime(latestRun.start_time)],
+              [t("current_substep"), latestRun.current_substep || t("not_set")],
+              [t("current_action"), latestRun.current_action || t("not_set")],
+              [t("active_backend"), latestRun.active_session_backend || t("not_set")],
             ])}
+          </div>
+          <div class="panel-block compact">
+            <h3>${escapeHtml(t("observer_focus"))}</h3>
+            <div class="rich-copy">${escapeHtml(observerSummary.headline || latestRun.waiting_reason || t("not_set"))}</div>
+            <div class="meta-list">
+              ${metaRows([
+                [t("observer_alerts"), formatAlertList(observerSummary.alerts)],
+                [t("waiting_reason"), latestRun.waiting_reason || t("not_set")],
+              ])}
+            </div>
           </div>
           <div class="panel-block compact">
             <h3>${escapeHtml(t("metrics"))}</h3>
@@ -803,6 +840,12 @@ function renderDetails() {
             ${workspaceFiles.length
               ? workspaceFiles.slice(0, 14).map((item) => `<div class="file-item"><span>${escapeHtml(item.path)}</span><strong>${escapeHtml(`${item.size} B`)}</strong></div>`).join("")
               : `<div class="file-item"><span>${escapeHtml(t("no_files"))}</span></div>`}
+          </div>
+        </div>
+        <div class="panel-block">
+          <h3>${escapeHtml(t("supervisor_events"))}</h3>
+          <div class="file-list">
+            ${renderSupervisorEventList(supervisorEvents, 8)}
           </div>
         </div>
       </div>
@@ -894,6 +937,9 @@ function canvasNodeMeta(node) {
   }
   if (node.type === "review") {
     return node.meta?.review_outcome || node.meta?.status || "review";
+  }
+  if (node.type === "supervisor") {
+    return node.meta?.event_type || node.meta?.status || "supervisor";
   }
   return node.meta?.kind || "";
 }
@@ -1027,7 +1073,7 @@ function renderCanvas() {
               </div>
             </div>
             <div class="canvas-legend">
-              ${["project", "run", "phase", "stage", "artifact", "decision", "review"].map((type) => `
+              ${["project", "run", "phase", "stage", "artifact", "decision", "review", "supervisor"].map((type) => `
                 <span class="legend-item"><span class="legend-swatch type-${escapeHtml(type)}"></span>${escapeHtml(typeLabel(type))}</span>
               `).join("")}
             </div>
@@ -1111,6 +1157,32 @@ function renderTimeline(events) {
   `;
 }
 
+function formatAlertList(alerts) {
+  if (!Array.isArray(alerts) || !alerts.length) {
+    return t("not_set");
+  }
+  return alerts.map((item) => String(item || "")).filter(Boolean).join(", ");
+}
+
+function renderSupervisorEventList(events, limit = 8) {
+  if (!Array.isArray(events) || !events.length) {
+    return `<div class="file-item"><span>${escapeHtml(t("no_supervisor_events"))}</span></div>`;
+  }
+  return events.slice(0, limit).map((event) => {
+    const status = String(event.status || "unknown").toLowerCase();
+    const title = event.event_type || event.title || t("not_set");
+    const summary = event.summary || event.description || "";
+    const timestamp = formatDateTime(event.timestamp);
+    return `
+      <div class="file-item">
+        <span>${escapeHtml(title)}</span>
+        <strong class="status-badge ${statusClass(status)}">${escapeHtml(timestamp)}</strong>
+        <div class="rich-copy">${escapeHtml(summary)}</div>
+      </div>
+    `;
+  }).join("");
+}
+
 function renderStudio() {
   const studio = state.studio;
   if (!studio) {
@@ -1122,6 +1194,9 @@ function renderStudio() {
   const timeline = studio.timeline || [];
   const logs = studio.logs || [];
   const controls = studio.controls || {};
+  const latestRun = studio.latest_run || {};
+  const observerSummary = studio.observer_summary || latestRun.observer_summary || {};
+  const supervisorEvents = studio.supervisor_events || latestRun.supervisor_events || [];
 
   els.studio.innerHTML = `
     ${renderSubtabBar("studio", [
@@ -1162,6 +1237,22 @@ function renderStudio() {
           <div class="panel-block">
             <h3>${escapeHtml(t("current_context"))}</h3>
             <div class="rich-copy">${escapeHtml(studio.project?.latest_summary || t("message_flow_empty"))}</div>
+          </div>
+          <div class="panel-block">
+            <h3>${escapeHtml(t("supervisor_events"))}</h3>
+            <div class="meta-list">
+              ${metaRows([
+                [t("observer_focus"), observerSummary.headline || t("not_set")],
+                [t("observer_alerts"), formatAlertList(observerSummary.alerts)],
+                [t("current_substep"), latestRun.current_substep || t("not_set")],
+                [t("current_action"), latestRun.current_action || t("not_set")],
+                [t("active_backend"), latestRun.active_session_backend || t("not_set")],
+              ])}
+            </div>
+            ${latestRun.waiting_reason ? `<div class="rich-copy">${escapeHtml(latestRun.waiting_reason)}</div>` : ""}
+            <div class="file-list">
+              ${renderSupervisorEventList(supervisorEvents, 6)}
+            </div>
           </div>
         </aside>
       </div>
@@ -1484,6 +1575,7 @@ async function loadProjects() {
   renderProjectList();
   if (!state.projects.length) {
     state.selectedProjectId = null;
+    window.localStorage.removeItem(SELECTED_PROJECT_STORAGE_KEY);
     state.selectedProject = null;
     els.workspace.classList.add("hidden");
     els.emptyState.classList.remove("hidden");
@@ -1519,6 +1611,7 @@ async function loadProjectWorkspace(projectId) {
 
 async function selectProject(projectId) {
   state.selectedProjectId = projectId;
+  window.localStorage.setItem(SELECTED_PROJECT_STORAGE_KEY, projectId);
   await loadProjectWorkspace(projectId);
 }
 

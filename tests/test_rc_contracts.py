@@ -58,7 +58,7 @@ def test_topic_init_contract_has_expected_input_output_files():
     contract = CONTRACTS[Stage.TOPIC_INIT]
 
     assert contract.input_files == ()
-    assert contract.output_files == ("goal.md", "hardware_profile.json")
+    assert contract.output_files == ("goal.md", "goal_brief.md", "hardware_profile.json")
 
 
 def test_export_publish_contract_has_expected_outputs():

@@ -284,6 +284,57 @@ def _build_seed_digest(
     return "\n".join(lines)
 
 
+def _build_screening_candidates_text(
+    rows: list[dict[str, Any]],
+    *,
+    max_items: int = 80,
+    abstract_chars: int = 320,
+) -> str:
+    """Compress candidate rows into a screening-friendly text bundle."""
+    lines: list[str] = []
+    sorted_rows = sorted(
+        rows,
+        key=lambda row: (
+            -int(row.get("keyword_overlap", 0) or 0),
+            -(float(row.get("score", 0.0) or 0.0)),
+            -int(row.get("year", 0) or 0),
+            str(row.get("title", "")).lower(),
+        ),
+    )
+    for idx, row in enumerate(sorted_rows[:max_items], start=1):
+        title = str(row.get("title", "")).strip()
+        if not title:
+            continue
+        abstract = re.sub(r"\s+", " ", str(row.get("abstract", "")).strip())
+        if len(abstract) > abstract_chars:
+            abstract = abstract[: abstract_chars - 3].rstrip() + "..."
+        authors = row.get("authors", [])
+        first_author = ""
+        if isinstance(authors, list) and authors:
+            head = authors[0]
+            if isinstance(head, dict):
+                first_author = str(head.get("name", "")).strip()
+            else:
+                first_author = str(head).strip()
+        meta = [f"[{idx}] {title}", f"source={str(row.get('source', '')).strip() or 'unknown'}"]
+        year = row.get("year")
+        if year not in (None, "", 0):
+            meta.append(f"year={year}")
+        overlap = row.get("keyword_overlap")
+        if overlap not in (None, "", 0):
+            meta.append(f"keyword_overlap={overlap}")
+        if first_author:
+            meta.append(f"first_author={first_author}")
+        lines.append(" | ".join(meta))
+        if abstract:
+            lines.append(f"abstract: {abstract}")
+        url = str(row.get("url", "")).strip()
+        if url:
+            lines.append(f"url: {url}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
 def _build_literature_shortlist_md(shortlist: list[dict[str, Any]]) -> str:
     lines = [
         "# Literature Shortlist",
@@ -315,6 +366,124 @@ def _build_literature_shortlist_md(shortlist: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _build_related_work_map(rows: list[dict[str, Any]], topic: str) -> str:
+    buckets: dict[str, list[dict[str, Any]]] = {
+        "Core Problem Formulations": [],
+        "Adaptive / Dynamic Methods": [],
+        "Compression / Efficiency Methods": [],
+        "Benchmarks / Evaluation Protocols": [],
+        "Adjacent Applications And Systems": [],
+    }
+
+    for row in rows:
+        title = str(row.get("title", "")).strip()
+        abstract = str(row.get("abstract", "")).strip()
+        blob = f"{title} {abstract}".lower()
+        if any(token in blob for token in ("benchmark", "evaluation", "dataset", "leaderboard")):
+            bucket = "Benchmarks / Evaluation Protocols"
+        elif any(token in blob for token in ("adaptive", "dynamic", "online", "controller", "policy", "rank allocation")):
+            bucket = "Adaptive / Dynamic Methods"
+        elif any(token in blob for token in ("compression", "quantization", "svd", "low-rank", "lora", "peft", "efficient")):
+            bucket = "Compression / Efficiency Methods"
+        elif any(token in blob for token in ("system", "deployment", "serving", "inference", "application")):
+            bucket = "Adjacent Applications And Systems"
+        else:
+            bucket = "Core Problem Formulations"
+        buckets[bucket].append(row)
+
+    lines = [
+        "# Related Work Map",
+        "",
+        f"- Topic: {topic}",
+        f"- Papers organized: {len(rows)}",
+        "- Goal: turn the shortlist into a structured related-work backbone rather than a flat bibliography.",
+        "",
+    ]
+    for name, entries in buckets.items():
+        lines.append(f"## {name}")
+        if not entries:
+            lines.append("- No papers mapped yet.")
+            lines.append("")
+            continue
+        for row in entries[:8]:
+            title = str(row.get("title", "Untitled"))
+            year = row.get("year", "")
+            source = str(row.get("source", ""))
+            reason = str(row.get("keep_reason", "")).strip()
+            lines.append(f"- {title} ({year}, {source})")
+            if reason:
+                lines.append(f"  rationale: {reason[:220]}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _build_search_strategy_brief(
+    *,
+    topic: str,
+    queries: list[str],
+    year_min: int,
+    sources: list[dict[str, Any]],
+    source_mix: dict[str, int],
+) -> str:
+    lines = [
+        "# Search Strategy Brief",
+        "",
+        "- Source artifacts: `stage-03/search_plan.yaml`, `stage-03/sources.json`, `stage-03/queries.json`",
+        f"- Topic: {topic}",
+        f"- Minimum publication year: {year_min}",
+        "",
+        "## Core Queries",
+    ]
+    for query in queries[:8]:
+        lines.append(f"- {query}")
+    if not queries:
+        lines.append("- Query list unavailable; consult `stage-03/queries.json`.")
+    lines.extend(["", "## Preferred Sources"])
+    for row in sources[:8]:
+        name = str(row.get("name") or row.get("id") or "source")
+        status = str(row.get("status") or "unknown")
+        lines.append(f"- {name} [{status}]")
+    if not sources:
+        lines.append("- Source list unavailable; consult `stage-03/sources.json`.")
+    if source_mix:
+        lines.extend(["", "## Seed Mix"])
+        for name, count in sorted(source_mix.items()):
+            lines.append(f"- {name}: {count}")
+    lines.extend([
+        "",
+        "## Handoff Rule",
+        "- Use this brief as default context.",
+        "- Open the referenced Stage 03 files only when exact YAML/JSON details are required.",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def _build_scoping_handoff(
+    run_dir: Path,
+    *,
+    search_strategy_brief: str,
+) -> str:
+    goal_brief = _read_prior_artifact(run_dir, "goal_brief.md") or ""
+    problem_tree_brief = _read_prior_artifact(run_dir, "problem_tree_brief.md") or ""
+    problem_anchor_brief = _read_prior_artifact(run_dir, "problem_anchor_brief.md") or ""
+    parts = [
+        "# Early-Stage Scoping Handoff",
+        "",
+        "- Default compressed context for downstream stages.",
+        "- When exact wording or full details matter, read the referenced Stage 01-03 artifacts from disk.",
+        "",
+    ]
+    if goal_brief:
+        parts.extend(["## Goal", goal_brief[:1400], ""])
+    if problem_tree_brief:
+        parts.extend(["## Problem Decomposition", problem_tree_brief[:1600], ""])
+    if problem_anchor_brief:
+        parts.extend(["## Problem Anchor", problem_anchor_brief[:1400], ""])
+    parts.extend(["## Search Strategy", search_strategy_brief[:1800], ""])
+    return "\n".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Stage executors
 # ---------------------------------------------------------------------------
@@ -329,7 +498,7 @@ def _execute_search_strategy(
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
 ) -> StageResult:
-    problem_tree = _read_prior_artifact(run_dir, "problem_tree.md") or ""
+    problem_tree = _read_prior_artifact(run_dir, "problem_tree_brief.md") or _read_prior_artifact(run_dir, "problem_tree.md") or ""
     topic = config.research.topic
     max_seed_docs = max(1, int(getattr(config.research, "max_seed_docs", 12)))
     pdf_seed_files, note_seed_files, seed_candidates, _source_mix = _collect_seed_inputs(
@@ -391,7 +560,8 @@ def _execute_search_strategy(
     if llm is not None:
         _pm = prompts or PromptManager()
         _overlay = _get_evolution_overlay(run_dir, "search_strategy")
-        sp = _pm.for_stage("search_strategy", evolution_overlay=_overlay, topic=topic, problem_tree=problem_tree)
+        scoped_problem_tree = f"{problem_tree}\n\n[Full artifact: stage-02/problem_tree.md]"
+        sp = _pm.for_stage("search_strategy", evolution_overlay=_overlay, topic=topic, problem_tree=scoped_problem_tree)
         resp = _chat_with_prompt(
             llm,
             sp.system,
@@ -423,14 +593,20 @@ def _execute_search_strategy(
                 {
                     "name": "keyword_core",
                     "queries": _fallback_queries[:5],
-                    "sources": ["arxiv", "semantic_scholar", "openreview"],
+                    "sources": ["openalex", "semantic_scholar", "arxiv", "google_scholar"],
                     "max_results_per_query": 60,
                 },
                 {
                     "name": "backward_forward_citation",
                     "queries": _fallback_queries[5:10] or _fallback_queries[:3],
-                    "sources": ["semantic_scholar", "google_scholar"],
+                    "sources": ["semantic_scholar", "google_scholar", "dblp", "crossref"],
                     "depth": 1,
+                },
+                {
+                    "name": "publisher_specific",
+                    "queries": _fallback_queries[:4],
+                    "sources": ["ieee_xplore", "acm_digital_library", "ei_compendex"],
+                    "max_results_per_query": 40,
                 },
             ],
             "filters": {
@@ -442,6 +618,15 @@ def _execute_search_strategy(
         }
     if not sources:
         sources = local_seed_sources + [
+            {
+                "id": "openalex",
+                "name": "OpenAlex",
+                "type": "api",
+                "url": "https://api.openalex.org/works",
+                "status": "available",
+                "query": topic,
+                "verified_at": _utcnow_iso(),
+            },
             {
                 "id": "arxiv",
                 "name": "arXiv",
@@ -457,6 +642,60 @@ def _execute_search_strategy(
                 "type": "api",
                 "url": "https://api.semanticscholar.org/graph/v1/paper/search",
                 "status": "available",
+                "query": topic,
+                "verified_at": _utcnow_iso(),
+            },
+            {
+                "id": "google_scholar",
+                "name": "Google Scholar",
+                "type": "web_index",
+                "url": "https://scholar.google.com/",
+                "status": "available",
+                "query": topic,
+                "verified_at": _utcnow_iso(),
+            },
+            {
+                "id": "ieee_xplore",
+                "name": "IEEE Xplore",
+                "type": "digital_library",
+                "url": "https://ieeexplore.ieee.org/",
+                "status": "available",
+                "query": topic,
+                "verified_at": _utcnow_iso(),
+            },
+            {
+                "id": "acm_digital_library",
+                "name": "ACM Digital Library",
+                "type": "digital_library",
+                "url": "https://dl.acm.org/",
+                "status": "available",
+                "query": topic,
+                "verified_at": _utcnow_iso(),
+            },
+            {
+                "id": "dblp",
+                "name": "DBLP",
+                "type": "bibliographic_index",
+                "url": "https://dblp.org/",
+                "status": "available",
+                "query": topic,
+                "verified_at": _utcnow_iso(),
+            },
+            {
+                "id": "crossref",
+                "name": "Crossref",
+                "type": "bibliographic_index",
+                "url": "https://api.crossref.org/works",
+                "status": "available",
+                "query": topic,
+                "verified_at": _utcnow_iso(),
+            },
+            {
+                "id": "ei_compendex",
+                "name": "EI Compendex",
+                "type": "bibliographic_index",
+                "url": "https://www.engineeringvillage.com/",
+                "status": "manual_or_institutional",
                 "query": topic,
                 "verified_at": _utcnow_iso(),
             },
@@ -597,14 +836,31 @@ def _execute_search_strategy(
         json.dumps({"queries": queries_list, "year_min": year_min}, indent=2),
         encoding="utf-8",
     )
+    search_strategy_brief = _build_search_strategy_brief(
+        topic=topic,
+        queries=queries_list,
+        year_min=year_min,
+        sources=sources,
+        source_mix=_source_mix,
+    )
+    (stage_dir / "search_strategy_brief.md").write_text(
+        search_strategy_brief,
+        encoding="utf-8",
+    )
+    (stage_dir / "scoping_handoff.md").write_text(
+        _build_scoping_handoff(run_dir, search_strategy_brief=search_strategy_brief),
+        encoding="utf-8",
+    )
     return StageResult(
         stage=Stage.SEARCH_STRATEGY,
         status=StageStatus.DONE,
-        artifacts=("search_plan.yaml", "sources.json", "queries.json"),
+        artifacts=("search_plan.yaml", "sources.json", "queries.json", "search_strategy_brief.md", "scoping_handoff.md"),
         evidence_refs=(
             "stage-03/search_plan.yaml",
             "stage-03/sources.json",
             "stage-03/queries.json",
+            "stage-03/search_strategy_brief.md",
+            "stage-03/scoping_handoff.md",
         ),
     )
 
@@ -654,7 +910,7 @@ def _execute_literature_collect(
         )
         papers = search_papers_multi_query(
             expanded_queries,
-            limit_per_query=40,
+            limit_per_query=60,
             year_min=year_min,
             s2_api_key=config.llm.s2_api_key,
         )
@@ -707,7 +963,7 @@ def _execute_literature_collect(
 
     # --- Fallback: LLM-generated candidates ---
     if not candidates and llm is not None:
-        plan_text = _read_prior_artifact(run_dir, "search_plan.yaml") or ""
+        plan_text = _read_prior_artifact(run_dir, "search_strategy_brief.md") or _read_prior_artifact(run_dir, "search_plan.yaml") or ""
         _pm = prompts or PromptManager()
         _overlay = _get_evolution_overlay(run_dir, "literature_collect")
         sp = _pm.for_stage("literature_collect", evolution_overlay=_overlay, topic=topic, plan_text=plan_text)
@@ -741,8 +997,14 @@ def _execute_literature_collect(
                 max_scholar_results=config.web_search.max_scholar_results,
                 max_crawl_urls=config.web_search.max_crawl_urls,
             )
+            site_queries = list(queries) + [
+                f"{topic} site:scholar.google.com",
+                f"{topic} site:ieeexplore.ieee.org",
+                f"{topic} site:dl.acm.org",
+                f"{topic} site:arxiv.org",
+            ]
             web_result = web_agent.search_and_extract(
-                topic, search_queries=queries,
+                topic, search_queries=site_queries,
             )
 
             # Convert Google Scholar papers into candidates
@@ -928,6 +1190,10 @@ def _execute_literature_screen(
     prompts: PromptManager | None = None,
 ) -> StageResult:
     candidates_text = _read_prior_artifact(run_dir, "candidates.jsonl") or ""
+    allow_local_notes = bool(
+        tuple(getattr(config.research, "note_seed_paths", ()))
+        or str(getattr(config.knowledge_base, "obsidian_vault", "") or "").strip()
+    )
 
     # --- P1-1: keyword relevance pre-filter ---
     # Before LLM screening, drop papers whose title+abstract share no keywords
@@ -940,6 +1206,10 @@ def _execute_literature_screen(
     for raw_line in candidates_text.strip().splitlines():
         row = _safe_json_loads(raw_line, {})
         if not isinstance(row, dict):
+            continue
+        source = str(row.get("source", "")).strip().lower()
+        if not allow_local_notes and source in {"obsidian_note", "local_note"}:
+            dropped_count += 1
             continue
         title = str(row.get("title", "")).lower()
         abstract = str(row.get("abstract", "")).lower()
@@ -956,9 +1226,12 @@ def _execute_literature_screen(
     # If pre-filter dropped everything, fall back to original (safety valve)
     if not filtered_rows:
         filtered_rows = _parse_jsonl_rows(candidates_text)
-    # Rebuild candidates_text from filtered rows
-    candidates_text = "\n".join(
-        json.dumps(r, ensure_ascii=False) for r in filtered_rows
+    # Rebuild candidates_text from filtered rows using a compact digest rather
+    # than raw JSONL. This keeps Stage 5 screening within practical prompt size.
+    candidates_text = _build_screening_candidates_text(
+        filtered_rows,
+        max_items=80,
+        abstract_chars=320,
     )
     logger.info(
         "Domain pre-filter: kept %d, dropped %d (keywords: %s)",
@@ -991,8 +1264,8 @@ def _execute_literature_screen(
         payload = _safe_json_loads(resp.content, {})
         if isinstance(payload, dict) and isinstance(payload.get("shortlist"), list):
             shortlist = [row for row in payload["shortlist"] if isinstance(row, dict)]
-    # T2.2: Ensure minimum shortlist size of 15 for adequate related work
-    _MIN_SHORTLIST = 15
+    # Raise the floor so later related-work synthesis has enough coverage.
+    _MIN_SHORTLIST = 30
     if not shortlist:
         rows = (
             filtered_rows[:_MIN_SHORTLIST]
@@ -1029,11 +1302,19 @@ def _execute_literature_screen(
         _build_literature_shortlist_md(shortlist),
         encoding="utf-8",
     )
+    (stage_dir / "related_work_map.md").write_text(
+        _build_related_work_map(shortlist, config.research.topic),
+        encoding="utf-8",
+    )
     return StageResult(
         stage=Stage.LITERATURE_SCREEN,
         status=StageStatus.DONE,
-        artifacts=("shortlist.jsonl", "literature_shortlist.md"),
-        evidence_refs=("stage-05/shortlist.jsonl", "stage-05/literature_shortlist.md"),
+        artifacts=("shortlist.jsonl", "literature_shortlist.md", "related_work_map.md"),
+        evidence_refs=(
+            "stage-05/shortlist.jsonl",
+            "stage-05/literature_shortlist.md",
+            "stage-05/related_work_map.md",
+        ),
     )
 
 
@@ -1075,7 +1356,7 @@ def _execute_knowledge_extract(
             cards = [item for item in payload["cards"] if isinstance(item, dict)]
     if not cards:
         rows = _parse_jsonl_rows(shortlist)
-        for idx, paper in enumerate(rows[:6]):
+        for idx, paper in enumerate(rows[:12]):
             title = str(paper.get("title", f"Paper {idx + 1}"))
             cards.append(
                 {
@@ -1089,6 +1370,9 @@ def _execute_knowledge_extract(
                     "limitations": "Template limitation",
                     "citation": str(paper.get("url", "")),
                     "cite_key": str(paper.get("cite_key", "")),
+                    "relation_to_topic": "candidate prior work",
+                    "baseline_role": "comparison_or_context",
+                    "gap_signal": str(paper.get("keep_reason", "") or "needs manual interpretation"),
                 }
             )
     for idx, card in enumerate(cards):
@@ -1103,14 +1387,21 @@ def _execute_knowledge_extract(
             "findings",
             "limitations",
             "citation",
+            "relation_to_topic",
+            "baseline_role",
+            "gap_signal",
         ):
             parts.append(f"## {key.title()}")
             parts.append(str(card.get(key, "")))
             parts.append("")
         (cards_dir / f"{card_id}.md").write_text("\n".join(parts), encoding="utf-8")
+    (stage_dir / "related_work_map.md").write_text(
+        _build_related_work_map(_parse_jsonl_rows(_read_prior_artifact(run_dir, "shortlist.jsonl") or ""), config.research.topic),
+        encoding="utf-8",
+    )
     return StageResult(
         stage=Stage.KNOWLEDGE_EXTRACT,
         status=StageStatus.DONE,
-        artifacts=("cards/",),
-        evidence_refs=("stage-06/cards/",),
+        artifacts=("cards/", "related_work_map.md"),
+        evidence_refs=("stage-06/cards/", "stage-06/related_work_map.md"),
     )

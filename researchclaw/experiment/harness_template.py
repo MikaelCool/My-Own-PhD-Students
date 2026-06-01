@@ -2,7 +2,7 @@
 
 This file is injected into the sandbox project directory at execution time.
 The LLM-generated experiment code should import and use this harness for:
-- Time budget management (should_stop)
+- Metric/reporting management without premature time-budget stops
 - Metric reporting (report_metric)
 - Result finalization (finalize)
 - NaN/divergence detection (built-in)
@@ -13,6 +13,8 @@ for metric reporting, inspired by karpathy/autoresearch's immutable prepare.py.
 
 import json
 import math
+import os
+import signal
 import sys
 import time
 
@@ -27,6 +29,7 @@ class ExperimentHarness:
         self._partial_results: list[dict[str, object]] = []
         self._step_count = 0
         self._nan_count = 0
+        self._install_signal_handlers()
 
     @property
     def elapsed(self) -> float:
@@ -39,8 +42,15 @@ class ExperimentHarness:
         return min(self.elapsed / self._time_budget, 1.0)
 
     def should_stop(self) -> bool:
-        """Return True if approaching 80% of time budget."""
-        return self.elapsed >= self._time_budget * 0.8
+        """Return False; the sandbox timeout is the authoritative budget.
+
+        Earlier versions stopped at 80% of the configured budget. For long
+        multi-condition experiments this could skip an entire later condition,
+        leaving no finite metrics and causing downstream aggregation failures.
+        Experiments should checkpoint partial results, but should not silently
+        abandon conditions before the real sandbox timeout.
+        """
+        return False
 
     def check_value(self, value: float, name: str = "metric") -> bool:
         """Return True if value is finite. Log warning and count NaN/Inf."""
@@ -79,26 +89,75 @@ class ExperimentHarness:
         self._metrics[name] = value
         # Standard format recognized by sandbox metric parser
         print(f"{name}: {value}")
+        self._write_partial_checkpoint()
 
     def log_result(self, result_dict: dict[str, object]) -> None:
         """Log a structured result row (e.g., per-condition results)."""
         self._partial_results.append(result_dict)
+        self._write_partial_checkpoint()
 
-    def finalize(self) -> None:
-        """Write results.json with all reported metrics and partial results."""
+    def _snapshot(self, *, status: str) -> dict[str, object]:
         output = {
+            "status": status,
             "metrics": self._metrics,
             "elapsed_sec": round(self.elapsed, 2),
             "time_budget_sec": self._time_budget,
             "steps_completed": self._step_count,
             "nan_count": self._nan_count,
+            "completed_seed_count": len(self._partial_results),
         }
         if self._partial_results:
             output["results"] = self._partial_results
+        return output
+
+    @staticmethod
+    def _atomic_json_dump(path: str, payload: dict[str, object]) -> None:
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, default=str, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp, path)
+
+    def _write_partial_checkpoint(self) -> None:
+        """Persist currently completed metrics/results after each seed.
+
+        This file is intentionally updated before the final ``results.json``.
+        If the web UI stops the pipeline, Docker is killed, or the machine
+        loses power, the controller can resume from the completed seed rows
+        instead of rerunning the whole iteration.
+        """
+        try:
+            self._atomic_json_dump(
+                "partial_results.json",
+                self._snapshot(status="partial"),
+            )
+        except OSError as e:
+            print(f"WARNING: Could not write partial_results.json: {e}", file=sys.stderr)
+
+    def _install_signal_handlers(self) -> None:
+        def _handler(signum, frame):  # noqa: ANN001
+            try:
+                self._write_partial_checkpoint()
+                self.finalize(status="interrupted")
+            finally:
+                raise SystemExit(128 + int(signum))
+
+        for sig_name in ("SIGTERM", "SIGINT"):
+            sig = getattr(signal, sig_name, None)
+            if sig is None:
+                continue
+            try:
+                signal.signal(sig, _handler)
+            except (ValueError, OSError):
+                pass
+
+    def finalize(self, status: str = "completed") -> None:
+        """Write results.json with all reported metrics and partial results."""
+        output = self._snapshot(status=status)
 
         try:
-            with open("results.json", "w", encoding="utf-8") as f:
-                json.dump(output, f, indent=2, default=str)
+            self._atomic_json_dump("partial_results.json", output)
+            self._atomic_json_dump("results.json", output)
         except OSError as e:
             print(f"WARNING: Could not write results.json: {e}", file=sys.stderr)
 

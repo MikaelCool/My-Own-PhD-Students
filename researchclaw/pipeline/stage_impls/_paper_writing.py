@@ -33,10 +33,104 @@ from researchclaw.pipeline._helpers import (
     _topic_constraint_block,
     _utcnow_iso,
 )
+from researchclaw.pipeline.research_governor import build_stage_skill_overlay
 from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
 
 logger = logging.getLogger(__name__)
+
+
+def _clip_paper_context(text: str, *, max_chars: int, label: str) -> str:
+    """Bound paper-writing prompt context while preserving both setup and evidence."""
+    if len(text) <= max_chars:
+        return text
+    if max_chars < 400:
+        return text[:max_chars].rstrip() + f"\n... [{label} truncated]\n"
+    head_len = int(max_chars * 0.62)
+    tail_len = max_chars - head_len
+    return (
+        text[:head_len].rstrip()
+        + f"\n\n... [{label} compacted: omitted {len(text) - max_chars} middle chars; "
+        "use referenced source artifacts on disk for full detail] ...\n\n"
+        + text[-tail_len:].lstrip()
+    )
+
+
+def _is_context_overflow_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "context" in msg and ("overflow" in msg or "length" in msg or "too long" in msg)
+
+
+def _call_paper_llm_part(
+    *,
+    llm: LLMClient,
+    system: str,
+    full_user: str,
+    compact_user: str,
+    max_tokens: int,
+    part_name: str,
+) -> str:
+    """Call the LLM for one paper section, compacting once on context overflow."""
+    try:
+        return _chat_with_prompt(
+            llm,
+            system,
+            full_user,
+            max_tokens=max_tokens,
+            retries=1,
+        ).content.strip()
+    except Exception as exc:  # noqa: BLE001
+        if not _is_context_overflow_error(exc):
+            raise RuntimeError(f"Stage 17: {part_name} LLM call failed: {exc}") from exc
+        logger.warning(
+            "Stage 17: %s hit context overflow; retrying with compact paper context",
+            part_name,
+        )
+        try:
+            return _chat_with_prompt(
+                llm,
+                system,
+                compact_user,
+                max_tokens=max_tokens,
+                retries=1,
+            ).content.strip()
+        except Exception as compact_exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"Stage 17: {part_name} LLM call failed after compact retry: "
+                f"{compact_exc}"
+            ) from compact_exc
+
+
+def _paper_readiness_gate(run_dir: Path) -> tuple[bool, list[str]]:
+    issues: list[str] = []
+    related_work_map = _read_prior_artifact(run_dir, "related_work_map.md") or ""
+    baseline_coverage = _read_prior_artifact(run_dir, "baseline_coverage_checklist.md") or ""
+    claim_pruning = _read_prior_artifact(run_dir, "claim_pruning.md") or ""
+    refs_bib = _read_prior_artifact(run_dir, "references.bib") or ""
+    if not related_work_map.strip():
+        issues.append("related_work_map.md is missing")
+    if not baseline_coverage.strip():
+        issues.append("baseline_coverage_checklist.md is missing")
+    if not claim_pruning.strip():
+        issues.append("claim_pruning.md is missing")
+    cite_count = refs_bib.count("@")
+    if cite_count < 15:
+        issues.append(f"references.bib has only {cite_count} entries (<15)")
+    # Keep paper writing moving with explicit warnings instead of hard-stopping.
+    # Downstream quality gates remain responsible for publication-level blocking.
+    return True, issues
+
+
+def _paper_readiness_warning_block(issues: list[str]) -> str:
+    if not issues:
+        return ""
+    lines = [
+        "## Paper Readiness Warnings",
+        "The following upstream paper-preparation artifacts are incomplete.",
+        "Proceed with drafting, but surface the gaps honestly and avoid overstating related-work coverage or claim pruning maturity.",
+    ]
+    lines.extend(f"- {issue}" for issue in issues)
+    return "\n".join(lines) + "\n"
 
 
 def _execute_paper_outline(
@@ -48,6 +142,7 @@ def _execute_paper_outline(
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
 ) -> StageResult:
+    ready, issues = _paper_readiness_gate(run_dir)
     analysis = _read_best_analysis(run_dir)
     decision = _read_prior_artifact(run_dir, "decision.md") or ""
     preamble = _build_context_preamble(
@@ -79,6 +174,9 @@ def _execute_paper_outline(
                 )
         except (json.JSONDecodeError, KeyError):
             pass
+    readiness_warning = _paper_readiness_warning_block(issues)
+    if readiness_warning:
+        feedback = readiness_warning + ("\n" + feedback if feedback else "")
 
     if llm is not None:
         _pm = prompts or PromptManager()
@@ -92,6 +190,21 @@ def _execute_paper_outline(
             for part in (
                 _get_evolution_overlay(run_dir, "paper_outline"),
                 _build_startup_contract_block(run_dir, stage_name="paper_outline"),
+                build_stage_skill_overlay(
+                    config,
+                    stage_name="paper_outline",
+                    context="\n\n".join(
+                        (
+                            config.research.topic,
+                            preamble[:2500],
+                            analysis[:1500],
+                            decision[:1000],
+                            feedback[:1000],
+                            "paper outline title abstract introduction related work figure 1 Nature style",
+                        )
+                    ),
+                    max_chars=3200,
+                ),
             )
             if part
         )
@@ -131,11 +244,24 @@ def _execute_paper_outline(
     else:
         outline = _default_paper_outline(config.research.topic)
     (stage_dir / "outline.md").write_text(outline, encoding="utf-8")
+    (stage_dir / "paper_readiness.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ready": ready and not issues,
+                "issues": issues,
+                "blocking": False,
+                "generated": _utcnow_iso(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     return StageResult(
         stage=Stage.PAPER_OUTLINE,
         status=StageStatus.DONE,
-        artifacts=("outline.md",),
-        evidence_refs=("stage-16/outline.md",),
+        artifacts=("outline.md", "paper_readiness.json"),
+        evidence_refs=("stage-16/outline.md", "stage-16/paper_readiness.json"),
     )
 
 
@@ -326,6 +452,7 @@ def _write_paper_sections(
     *,
     llm: LLMClient,
     pm: PromptManager,
+    config: RCConfig | None = None,
     run_dir: Path | None = None,
     preamble: str,
     topic_constraint: str,
@@ -348,11 +475,31 @@ def _write_paper_sections(
     except (KeyError, Exception):  # noqa: BLE001
         _writing_structure = ""
 
+    _skill_overlay = ""
+    if config is not None:
+        _skill_overlay = build_stage_skill_overlay(
+            config,
+            stage_name="paper_draft",
+            context="\n\n".join(
+                (
+                    config.research.topic,
+                    preamble[:3000],
+                    outline[:2000],
+                    exp_metrics_instruction[:2000],
+                    citation_instruction[:1000],
+                    "paper draft manuscript abstract introduction related work method "
+                    "experiments results discussion conclusion figure table caption Nature style",
+                )
+            ),
+            max_chars=3600,
+        )
+
     _overlay = "\n".join(
         part
         for part in (
             _get_evolution_overlay(run_dir, "paper_draft"),
             _build_startup_contract_block(run_dir, stage_name="paper_draft"),
+            _skill_overlay,
         )
         if part
     )
@@ -366,6 +513,23 @@ def _write_paper_sections(
         writing_structure=_writing_structure,
         outline=outline,
     ).system
+    compact_preamble = _clip_paper_context(preamble, max_chars=7000, label="preamble")
+    compact_outline = _clip_paper_context(outline, max_chars=4000, label="outline")
+    compact_metrics = _clip_paper_context(
+        exp_metrics_instruction,
+        max_chars=14000,
+        label="experiment evidence",
+    )
+    compact_citations = _clip_paper_context(
+        citation_instruction,
+        max_chars=6000,
+        label="citation list",
+    )
+    compact_overlay = _clip_paper_context(
+        _skill_overlay,
+        max_chars=2500,
+        label="skill overlay",
+    )
 
     sections: list[str] = []
 
@@ -407,6 +571,7 @@ def _write_paper_sections(
         f"{narrative_writing_rules}\n"
         f"{anti_hedging_rules}\n"
         f"{anti_repetition_rules}\n\n"
+        f"{_skill_overlay}\n"
         "Write the following sections of a NeurIPS/ICML-quality paper in markdown. "
         "Follow the LENGTH REQUIREMENTS strictly:\n\n"
         "1. **Title** (HARD RULE: MUST be 14 words or fewer. Create a catchy method name "
@@ -425,24 +590,47 @@ def _write_paper_sections(
         "data verification, condition listing, or metric enumeration before the title. "
         "The paper should read like a published manuscript, not a data report."
     )
+    call1_user_compact = (
+        f"{compact_preamble}\n\n"
+        f"{topic_constraint}"
+        f"{compact_citations}\n\n"
+        f"{title_guidelines}\n\n"
+        f"{academic_style_guide}\n"
+        f"{narrative_writing_rules}\n"
+        f"{anti_hedging_rules}\n"
+        f"{anti_repetition_rules}\n\n"
+        f"{compact_overlay}\n"
+        "Write the following sections of a NeurIPS/ICML-quality paper in markdown. "
+        "Follow the LENGTH REQUIREMENTS strictly:\n\n"
+        "1. **Title** (HARD RULE: MUST be 14 words or fewer. Create a catchy method name "
+        "first, then build the title: 'MethodName: Subtitle'. If your title exceeds 14 words, "
+        "it will be automatically rejected. NEVER use 'Untitled Paper'.)\n"
+        f"2. **Abstract** (150-220 words — HARD LIMIT. Do NOT exceed 220 words. "
+        f"Do NOT include raw metric paths or 16-digit decimals.){abstract_structure}\n"
+        "3. **Introduction** (800-1000 words): real-world motivation, problem statement, "
+        "research gap analysis with citations, method overview, 3-4 contributions as bullet points, "
+        "paper organization paragraph. MUST cite 8-12 references.\n"
+        "4. **Related Work** (600-800 words): organized into 3-4 thematic subsections, each discussing "
+        "4-5 papers with proper citations. Compare approaches, identify limitations, position this work.\n\n"
+        f"Outline:\n{compact_outline}\n\n"
+        "Output markdown with ## headers. Do NOT include a References section.\n"
+        "IMPORTANT: Start DIRECTLY with '## Title'. Do NOT include any preamble, "
+        "data verification, condition listing, or metric enumeration before the title. "
+        "The paper should read like a published manuscript, not a data report."
+    )
     # R14-1: Higher token limit for reasoning models
     _paper_max_tokens = 12000
     if any(model_name.startswith(p) for p in ("gpt-5", "o3", "o4")):
         _paper_max_tokens = 24000
 
-    # T3.5: Retry once on failure, use placeholder if still fails
-    try:
-        resp1 = _chat_with_prompt(llm, system, call1_user, max_tokens=_paper_max_tokens, retries=1)
-        part1 = resp1.content.strip()
-    except Exception:  # noqa: BLE001
-        logger.error("Stage 17: Part 1 LLM call failed after retry — using placeholder")
-        part1 = (
-            "## Title\n[PLACEHOLDER — LLM call failed]\n\n"
-            "## Abstract\n[This section could not be generated due to an LLM error. "
-            "Please regenerate this stage.]\n\n"
-            "## Introduction\n[PLACEHOLDER]\n\n"
-            "## Related Work\n[PLACEHOLDER]"
-        )
+    part1 = _call_paper_llm_part(
+        llm=llm,
+        system=system,
+        full_user=call1_user,
+        compact_user=call1_user_compact,
+        max_tokens=_paper_max_tokens,
+        part_name="Part 1",
+    )
     sections.append(part1)
     logger.info("Stage 17: Part 1 (Title+Abstract+Intro+Related Work) — %d chars", len(part1))
 
@@ -453,6 +641,7 @@ def _write_paper_sections(
         f"{exp_metrics_instruction}\n\n"
         f"{narrative_writing_rules}\n"
         f"{anti_hedging_rules}\n\n"
+        f"{_skill_overlay}\n"
         # IMP-21: Citation instruction for Method + Experiments
         "CITATION REQUIREMENT: The Method section MUST cite at least 3-5 related "
         "technical papers (foundations your method builds on). The Experiments section "
@@ -474,15 +663,42 @@ def _write_paper_sections(
         f"Outline:\n{outline}\n\n"
         "Output markdown with ## headers. Continue from where Part 1 ended."
     )
-    try:
-        resp2 = _chat_with_prompt(llm, system, call2_user, max_tokens=_paper_max_tokens, retries=1)
-        part2 = resp2.content.strip()
-    except Exception:  # noqa: BLE001
-        logger.error("Stage 17: Part 2 LLM call failed after retry — using placeholder")
-        part2 = (
-            "## Method\n[PLACEHOLDER — LLM call failed. Please regenerate this stage.]\n\n"
-            "## Experiments\n[PLACEHOLDER]"
-        )
+    compact_part1 = _clip_paper_context(part1, max_chars=5000, label="previous sections")
+    call2_user_compact = (
+        f"{compact_preamble}\n\n"
+        f"{topic_constraint}"
+        f"{compact_metrics}\n\n"
+        f"{narrative_writing_rules}\n"
+        f"{anti_hedging_rules}\n\n"
+        f"{compact_overlay}\n"
+        "CITATION REQUIREMENT: The Method section MUST cite at least 3-5 related "
+        "technical papers (foundations your method builds on). The Experiments section "
+        "MUST cite baseline method papers. Use [cite_key] syntax.\n"
+        f"{compact_citations}\n\n"
+        "You are continuing a paper. The sections written so far are:\n\n"
+        f"---\n{compact_part1}\n---\n\n"
+        "Now write the next sections, maintaining consistency with the above:\n\n"
+        "5. **Method** (1000-1500 words): formal problem definition with mathematical notation "
+        "($x$, $\\theta$, etc.), detailed algorithm description with equations, step-by-step procedure, "
+        "complexity analysis, design rationale for key choices. Include algorithm pseudocode if applicable. "
+        "Write as FLOWING PROSE — do NOT use bullet-point lists for method components.\n"
+        "6. **Experiments** (800-1200 words): detailed experimental setup, datasets with statistics "
+        "(size, splits, features), all baselines and their implementations, hyperparameter settings "
+        "in a markdown table, evaluation metrics with mathematical definitions, hardware and runtime info.\n"
+        "METHOD NAMES IN TABLES: Use SHORT abbreviations (4-8 chars) for method names "
+        "in tables. Define abbreviation mappings in a footnote. "
+        "NEVER put method names longer than 20 characters in table cells.\n\n"
+        f"Outline:\n{compact_outline}\n\n"
+        "Output markdown with ## headers. Continue from where Part 1 ended."
+    )
+    part2 = _call_paper_llm_part(
+        llm=llm,
+        system=system,
+        full_user=call2_user,
+        compact_user=call2_user_compact,
+        max_tokens=_paper_max_tokens,
+        part_name="Part 2",
+    )
     sections.append(part2)
     logger.info("Stage 17: Part 2 (Method+Experiments) — %d chars", len(part2))
 
@@ -494,6 +710,7 @@ def _write_paper_sections(
         f"{narrative_writing_rules}\n"
         f"{anti_hedging_rules}\n"
         f"{anti_repetition_rules}\n\n"
+        f"{_skill_overlay}\n"
         # IMP-21: Citation instruction for Results + Discussion + Conclusion
         "CITATION REQUIREMENT: The Discussion section MUST cite at least 3-5 papers "
         "when comparing findings with prior work. The Conclusion may cite 1-2 "
@@ -530,17 +747,58 @@ def _write_paper_sections(
         "- Use \\begin{algorithm} or pseudocode notation, NOT \\begin{verbatim}\n\n"
         "Output markdown with ## headers. Do NOT include a References section."
     )
-    try:
-        resp3 = _chat_with_prompt(llm, system, call3_user, max_tokens=_paper_max_tokens, retries=1)
-        part3 = resp3.content.strip()
-    except Exception:  # noqa: BLE001
-        logger.error("Stage 17: Part 3 LLM call failed after retry — using placeholder")
-        part3 = (
-            "## Results\n[PLACEHOLDER — LLM call failed. Please regenerate this stage.]\n\n"
-            "## Discussion\n[PLACEHOLDER]\n\n"
-            "## Limitations\n[PLACEHOLDER]\n\n"
-            "## Conclusion\n[PLACEHOLDER]"
-        )
+    compact_part2 = _clip_paper_context(part2, max_chars=5000, label="method and experiments")
+    call3_user_compact = (
+        f"{compact_preamble}\n\n"
+        f"{topic_constraint}"
+        f"{compact_metrics}\n\n"
+        f"{narrative_writing_rules}\n"
+        f"{anti_hedging_rules}\n"
+        f"{anti_repetition_rules}\n\n"
+        f"{compact_overlay}\n"
+        "CITATION REQUIREMENT: The Discussion section MUST cite at least 3-5 papers "
+        "when comparing findings with prior work. The Conclusion may cite 1-2 "
+        "foundational references.\n"
+        f"{compact_citations}\n\n"
+        "You are completing a paper. The sections written so far are:\n\n"
+        f"---\n{compact_part1}\n\n{compact_part2}\n---\n\n"
+        "Now write the final sections, maintaining consistency:\n\n"
+        "7. **Results** (600-800 words):\n"
+        "   - START with an AGGREGATED results table (Table 1): rows = methods, columns = metrics.\n"
+        "     Each cell = mean ± std across seeds. Bold the best value per column.\n"
+        "     EVERY table MUST have a descriptive caption that allows understanding without "
+        "     reading the main text. NEVER use just 'Table 1' as a caption.\n"
+        "   - Follow with a PER-REGIME table (Table 2) breaking down by easy/hard regimes.\n"
+        "   - Include a STATISTICAL COMPARISON table (Table 3): paired t-tests between key methods.\n"
+        "   - NEVER dump raw per-seed numbers in the main text. Aggregate first, then discuss.\n"
+        "   - MUST include at least 2 figures using markdown image syntax: ![Caption](charts/filename.png)\n"
+        "     One figure MUST be a performance comparison chart. Figures MUST be referenced "
+        "     in text: 'As shown in Figure 1, ...'\n"
+        "8. **Discussion** (400-600 words): interpretation of key findings, unexpected results, "
+        "comparison with prior work (CITE 3-5 papers here!), practical implications.\n"
+        "9. **Limitations** (200-300 words): honest assessment of scope, dataset, methodology. "
+        "ALL caveats consolidated HERE — nowhere else in the paper.\n"
+        "10. **Conclusion** (100-200 words MAXIMUM — this is a HARD LIMIT): "
+        "Summarize contributions in 2-3 sentences. State main finding in 1 sentence. "
+        "Suggest 2-3 concrete future directions in 1-2 sentences. "
+        "Do NOT repeat any specific numbers from Results. Do NOT restate the abstract. "
+        "A good conclusion is SHORT and forward-looking.\n\n"
+        "CRITICAL FORMATTING RULES FOR ALL SECTIONS:\n"
+        "- Write as FLOWING PROSE paragraphs, NOT bullet-point lists\n"
+        "- NEVER dump raw metric paths like 'config/method_name/seed_3/primary_metric'\n"
+        "- All numbers must be rounded to 4 decimal places maximum\n"
+        "- Every table MUST have a descriptive caption (not just 'Table 1')\n"
+        "- Use \\begin{algorithm} or pseudocode notation, NOT \\begin{verbatim}\n\n"
+        "Output markdown with ## headers. Do NOT include a References section."
+    )
+    part3 = _call_paper_llm_part(
+        llm=llm,
+        system=system,
+        full_user=call3_user,
+        compact_user=call3_user_compact,
+        max_tokens=_paper_max_tokens,
+        part_name="Part 3",
+    )
     sections.append(part3)
     logger.info("Stage 17: Part 3 (Results+Discussion+Limitations+Conclusion) — %d chars", len(part3))
 
@@ -1233,6 +1491,7 @@ def _execute_paper_draft(
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
 ) -> StageResult:
+    ready, issues = _paper_readiness_gate(run_dir)
     outline = _read_prior_artifact(run_dir, "outline.md") or ""
     preamble = _build_context_preamble(
         config,
@@ -1245,6 +1504,9 @@ def _execute_paper_draft(
         include_claims=True,
         include_experiment_data=True,  # WS-5.1: inject real experiment data
     )
+    readiness_warning = _paper_readiness_warning_block(issues)
+    if readiness_warning:
+        preamble = readiness_warning + "\n" + preamble
 
     # BUG-222: Read PROMOTED BEST experiment_summary for the paper prompt.
     # Previous code (R21-1) picked the "richest" experiment_summary across
@@ -1996,6 +2258,7 @@ def _execute_paper_draft(
         draft = _write_paper_sections(
             llm=llm,
             pm=_pm,
+            config=config,
             run_dir=run_dir,
             preamble=preamble,
             topic_constraint=topic_constraint,
@@ -2060,6 +2323,19 @@ Template references.
 
 Generated: {_utcnow_iso()}
 """
+    (stage_dir / "paper_readiness.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ready": ready and not issues,
+                "issues": issues,
+                "blocking": False,
+                "generated": _utcnow_iso(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     (stage_dir / "paper_draft.md").write_text(draft, encoding="utf-8")
 
     # Validate draft quality (section balance + bullet density)

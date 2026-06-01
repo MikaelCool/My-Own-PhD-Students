@@ -64,7 +64,6 @@
 
 ## 馃敟 News
 - **[03/22/2026]** [v0.3.2](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.2) 鈥?**Suporte multiplataforma + grande estabilidade** 鈥?O AutoResearchClaw agora funciona com qualquer agente compativel com ACP (Claude Code, Codex CLI, Copilot CLI, Gemini CLI, Kimi CLI) e suporta plataformas de mensagens (Discord, Telegram, Lark, WeChat) via ponte OpenClaw. Novo backend de geracao de codigo CLI-agent que delega os Stages 10 e 13 a agentes CLI externos com controle de orcamento e gerenciamento de timeout. Inclui sistema anti-fabricacao (VerifiedRegistry + loop de diagnostico e reparo), 100+ correcoes de bugs, refatoracao modular do executor, auto-deteccao de `--resume`, endurecimento de retries LLM e correcoes da comunidade.
-- **[03/18/2026]** [v0.3.1](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.1) 鈥?**OpenCode Beast Mode + Community Contributions** 鈥?New "Beast Mode" routes complex code generation to [OpenCode](https://github.com/anomalyco/opencode) with automatic complexity scoring and graceful fallback. Added Novita AI provider support, thread-safety hardening, improved LLM output parsing robustness, and 20+ bug fixes from community PRs and internal audit.
 - **[03/17/2026]** [v0.3.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.0) 鈥?**MetaClaw Integration** 鈥?AutoResearchClaw now supports [MetaClaw](https://github.com/aiming-lab/MetaClaw) cross-run learning: pipeline failures 鈫?structured lessons 鈫?reusable skills, injected into all 23 stages. **+18.3%** robustness in controlled experiments. Opt-in (`metaclaw_bridge.enabled: true`), fully backward-compatible. See [Integration Guide](#-metaclaw-integration).
 - **[03/16/2026]** [v0.2.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.2.0) 鈥?Three multi-agent subsystems (CodeAgent, BenchmarkAgent, FigureAgent), hardened Docker sandbox with network-policy-aware execution, 4-round paper quality audit (AI-slop detection, 7-dim review scoring, NeurIPS checklist), and 15+ bug fixes from production runs.
 - **[03/15/2026]** [v0.1.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.1.0) 鈥?We release AutoResearchClaw: a fully autonomous 23-stage research pipeline that turns a single research idea into a conference-ready paper. No human intervention required.
@@ -113,7 +112,6 @@ cd My-Own-PhD-Students
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-# 2. Setup (interativo 鈥?instala OpenCode beast mode, verifica Docker/LaTeX)
 researchclaw setup
 
 # 3. Configure
@@ -227,7 +225,6 @@ O AutoResearchClaw pode usar **qualquer agente de codifica莽茫o compat铆vel c
 | Codex CLI | `codex` | OpenAI |
 | Copilot CLI | `gh` | GitHub |
 | Gemini CLI | `gemini` | Google |
-| OpenCode | `opencode` | SST |
 | Kimi CLI | `kimi` | Moonshot |
 
 ```yaml
@@ -253,7 +250,6 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 | **API Python** | `from researchclaw.pipeline import Runner; Runner(config).run()` |
 | **Claude Code** | L锚 `RESEARCHCLAW_CLAUDE.md` 鈥?basta dizer *"Execute pesquisa sobre [t贸pico]"* |
 | **Copilot CLI** | `researchclaw run --topic "..."` com `llm.acp.agent: "gh"` |
-| **OpenCode** | L锚 `.claude/skills/` 鈥?mesma interface em linguagem natural |
 | **Qualquer CLI de IA** | Forne莽a `RESEARCHCLAW_AGENTS.md` como contexto 鈫?o agente faz bootstrap automaticamente |
 
 ---
@@ -312,7 +308,6 @@ Fase D: Design de Experimentos      Fase H: Finaliza莽茫o
 | **馃摎 Literatura Multi-Fonte** | Artigos reais do OpenAlex, Semantic Scholar & arXiv 鈥?expans茫o de consultas, deduplica莽茫o, circuit breaker com degrada莽茫o graciosa |
 | **馃攳 Verifica莽茫o de Cita莽玫es em 4 Camadas** | Verifica莽茫o de arXiv ID 鈫?CrossRef/DataCite DOI 鈫?correspond锚ncia de t铆tulo no Semantic Scholar 鈫?pontua莽茫o de relev芒ncia por LLM. Refer锚ncias alucinadas removidas automaticamente. |
 | **馃枼锔?Execu莽茫o com Consci锚ncia de Hardware** | Detecta automaticamente GPU (NVIDIA CUDA / Apple MPS / apenas CPU) e adapta gera莽茫o de c贸digo, imports e escala de experimentos |
-| **馃 OpenCode Beast Mode** | Experimentos complexos roteados automaticamente para o [OpenCode](https://github.com/anomalyco/opencode) 鈥?gera projetos multi-arquivo com arquiteturas customizadas, loops de treinamento e estudos de abla莽茫o. Instale via `researchclaw setup`. |
 | **馃И Experimentos em Sandbox** | C贸digo validado por AST, harness imut谩vel, fast-fail para NaN/Inf, reparo auto-repar谩vel, refinamento iterativo (at茅 10 rodadas), captura de resultados parciais |
 | **馃摑 Escrita com Qualidade de Confer锚ncia** | Templates NeurIPS/ICML/ICLR, reda莽茫o se莽茫o por se莽茫o (5.000-6.500 palavras), guarda anti-fabrica莽茫o, guarda de tamanho na revis茫o, imposi莽茫o anti-disclaimer |
 | **馃搻 Troca de Template** | `neurips_2025`, `iclr_2026`, `icml_2026` 鈥?Markdown 鈫?LaTeX com matem谩tica, tabelas, figuras, refer锚ncias cruzadas, `\cite{}` |
@@ -451,12 +446,10 @@ experiment:
     host: ""                       # Hostname do servidor GPU
     gpu_ids: []                    # IDs de GPU dispon铆veis
     remote_workdir: "/tmp/researchclaw_experiments"
-  opencode:                          # OpenCode Beast Mode (auto-instalado via `researchclaw setup`)
     enabled: true                    # Interruptor principal (padr茫o: true)
     auto: true                       # Acionamento autom谩tico sem confirma莽茫o (padr茫o: true)
     complexity_threshold: 0.2        # 0.0-1.0 鈥?maior = s贸 aciona em experimentos complexos
     model: ""                        # Modelo override (vazio = usa llm.primary_model)
-    timeout_sec: 600                 # M谩ximo de segundos para gera莽茫o OpenCode
     max_retries: 1                   # Contagem de retentativas em falha
     workspace_cleanup: true          # Remove workspace tempor谩rio ap贸s coleta
 

@@ -8,6 +8,7 @@ enabling automated repair via LLM re-generation.
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import Any
@@ -200,6 +201,41 @@ COMMON_SCIENCE: frozenset[str] = frozenset(
     }
 )
 
+_NON_CODE_RESPONSE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"you have hit your chatgpt usage limit", re.IGNORECASE),
+        "Upstream quota message returned instead of Python code.",
+    ),
+    (
+        re.compile(r"usage limit \(plus plan\)", re.IGNORECASE),
+        "Upstream quota message returned instead of Python code.",
+    ),
+    (
+        re.compile(r"\bquota exceeded\b", re.IGNORECASE),
+        "Upstream quota error returned instead of Python code.",
+    ),
+    (
+        re.compile(r"\brate limit(?:ed| exceeded)?\b", re.IGNORECASE),
+        "Upstream rate-limit error returned instead of Python code.",
+    ),
+    (
+        re.compile(r"try again in ~?\d+", re.IGNORECASE),
+        "Upstream retry-after message returned instead of Python code.",
+    ),
+    (
+        re.compile(r"context overflow:", re.IGNORECASE),
+        "Context-overflow message returned instead of Python code.",
+    ),
+    (
+        re.compile(r"remote end closed connection", re.IGNORECASE),
+        "Upstream transport error returned instead of Python code.",
+    ),
+    (
+        re.compile(r"^<!doctype html>|^<html", re.IGNORECASE),
+        "HTML error page returned instead of Python code.",
+    ),
+)
+
 
 # ---------------------------------------------------------------------------
 # AST visitor for security checks
@@ -314,6 +350,18 @@ def extract_imports(code: str) -> set[str]:
 def validate_syntax(code: str) -> CodeValidation:
     """Check *code* parses as valid Python."""
     result = CodeValidation()
+    non_code_reason = detect_non_code_response(code)
+    if non_code_reason:
+        result.issues.append(
+            ValidationIssue(
+                severity="error",
+                category="syntax",
+                message=non_code_reason,
+                line=1,
+                col=1,
+            )
+        )
+        return result
     try:
         ast.parse(code)
     except SyntaxError as exc:
@@ -402,6 +450,17 @@ def validate_code(
         combined.issues.extend(imp.issues)
 
     return combined
+
+
+def detect_non_code_response(code: str) -> str | None:
+    """Return a reason if *code* is actually an upstream error message."""
+    stripped = code.strip()
+    if not stripped:
+        return None
+    for pattern, reason in _NON_CODE_RESPONSE_PATTERNS:
+        if pattern.search(stripped):
+            return reason
+    return None
 
 
 # ---------------------------------------------------------------------------

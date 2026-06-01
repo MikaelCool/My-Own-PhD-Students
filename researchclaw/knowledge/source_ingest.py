@@ -34,6 +34,8 @@ def load_obsidian_notes(
     *,
     max_notes: int = 16,
 ) -> list[dict[str, Any]]:
+    if not str(vault_path or "").strip():
+        return []
     path = Path(vault_path).expanduser()
     if not path.exists() or not path.is_dir():
         return []
@@ -284,4 +286,3 @@ def load_zotero_items(
             max_items=max_items,
         )
     return []
-

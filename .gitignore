@@ -12,12 +12,27 @@ workspaces/
 !.claude/skills/
 !.claude/skills/**/SKILL.md
 .claude/settings.local.json
+.codex
 
 # Experiment run artifacts (local only)
 artifacts/
 output/
 experiment_metaclaw/
 promotional/
+.researchclaw/
+checkpoints/
+memory/
+workspace.log
+partial_results.json
+results.json
+runtime_experiment_overrides.json
+
+# Root-level generated experiment blueprints (local run outputs)
+/data.py
+/evaluate.py
+/experiment_config.py
+/main.py
+/methods.py
 
 # Legacy experiment artifacts (pre-v5)
 exp/

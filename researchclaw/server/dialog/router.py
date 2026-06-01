@@ -4,15 +4,26 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
+from researchclaw.pipeline.control_state import (
+    read_control_state,
+    recent_supervisor_events,
+    summarize_control_state,
+)
 from researchclaw.server.dialog.intents import Intent, classify_intent
 from researchclaw.server.dialog.session import ChatSession, SessionManager
 
 logger = logging.getLogger(__name__)
 
-_session_manager = SessionManager()
+_session_manager = SessionManager(
+    os.environ.get(
+        "RESEARCHCLAW_DIALOG_DIR",
+        "/data2/lyc/researchclaw/dialog-sessions",
+    )
+)
 
 
 async def route_message(raw_message: str, client_id: str) -> str:
@@ -61,20 +72,51 @@ async def _handle_status(text: str, session: ChatSession) -> str:
     active = [r for r in runs if r.is_active]
     if active:
         r = active[0]
-        return (
-            f"**Active run**: {r.run_id}\n"
-            f"- Stage: {r.current_stage}/23 ({r.current_stage_name})\n"
-            f"- Status: {r.status}\n"
-            f"- Topic: {r.topic or '(not set)'}"
-        )
+        run_dir = Path(r.path)
+        control_state = read_control_state(run_dir)
+        observer_summary = summarize_control_state(run_dir, control_state) if control_state else {}
+        lines = [
+            f"**Active run**: {r.run_id}",
+            f"- Stage: {r.current_stage}/23 ({r.current_stage_name})",
+            f"- Status: {r.status}",
+            f"- Topic: {r.topic or '(not set)'}",
+        ]
+        if control_state:
+            lines.append(f"- Substep: {control_state.get('current_substep', '') or '(unknown)'}")
+        if observer_summary.get("headline"):
+            lines.append(f"- Focus: {observer_summary['headline']}")
+        alerts = observer_summary.get("alerts")
+        if isinstance(alerts, list) and alerts:
+            lines.append(f"- Alerts: {', '.join(str(item) for item in alerts[:4])}")
+        recent_events = recent_supervisor_events(run_dir, limit=1)
+        if recent_events:
+            latest_event = recent_events[-1]
+            summary = str(latest_event.get("summary") or "").strip()
+            event_type = str(latest_event.get("event_type") or "supervisor_event")
+            lines.append(f"- Supervisor: {event_type} — {summary or '(no summary)'}")
+        return "\n".join(lines)
 
     latest = runs[0]
-    return (
-        f"**Latest run**: {latest.run_id}\n"
-        f"- Stage: {latest.current_stage}/23\n"
-        f"- Status: {latest.status}\n"
-        f"- Stages completed: {len(latest.stages_completed)}"
-    )
+    latest_control = read_control_state(Path(latest.path))
+    latest_summary = summarize_control_state(Path(latest.path), latest_control) if latest_control else {}
+    lines = [
+        f"**Latest run**: {latest.run_id}",
+        f"- Stage: {latest.current_stage}/23",
+        f"- Status: {latest.status}",
+        f"- Stages completed: {len(latest.stages_completed)}",
+    ]
+    if latest_summary.get("headline"):
+        lines.append(f"- Focus: {latest_summary['headline']}")
+    alerts = latest_summary.get("alerts")
+    if isinstance(alerts, list) and alerts:
+        lines.append(f"- Alerts: {', '.join(str(item) for item in alerts[:4])}")
+    recent_events = recent_supervisor_events(Path(latest.path), limit=1)
+    if recent_events:
+        latest_event = recent_events[-1]
+        summary = str(latest_event.get("summary") or "").strip()
+        event_type = str(latest_event.get("event_type") or "supervisor_event")
+        lines.append(f"- Supervisor: {event_type} — {summary or '(no summary)'}")
+    return "\n".join(lines)
 
 
 async def _handle_start(text: str, session: ChatSession) -> str:

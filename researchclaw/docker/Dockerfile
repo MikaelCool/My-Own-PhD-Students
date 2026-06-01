@@ -2,16 +2,34 @@
 # Build: docker build -t researchclaw/experiment:latest researchclaw/docker/
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+ENV HTTP_PROXY=${HTTP_PROXY}
+ENV HTTPS_PROXY=${HTTPS_PROXY}
+ENV NO_PROXY=${NO_PROXY}
+ENV http_proxy=${http_proxy:-$HTTP_PROXY}
+ENV https_proxy=${https_proxy:-$HTTPS_PROXY}
+ENV no_proxy=${no_proxy:-$NO_PROXY}
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 
 # System packages: Python 3.11, build tools, common native deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN printf 'Acquire::Retries "8";\nAcquire::http::Timeout "60";\nAcquire::https::Timeout "60";\n' \
+        > /etc/apt/apt.conf.d/80-retries \
+    && apt-get update -o Acquire::Retries=8 \
+    && apt-get install -y --fix-missing --no-install-recommends \
         python3.11 python3.11-dev python3.11-venv python3-pip \
         gcc g++ cmake make gfortran \
         libopenblas-dev liblapack-dev \
         git curl ca-certificates \
+    && apt-get install -y --fix-missing --no-install-recommends \
         iptables iproute2 \
     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
     && python3 -m pip install --upgrade pip setuptools wheel \

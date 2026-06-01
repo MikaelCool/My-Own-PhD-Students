@@ -18,7 +18,18 @@ from researchclaw.hardware import HardwareProfile, detect_hardware, ensure_torch
 from researchclaw.llm import create_llm_client
 from researchclaw.llm.client import LLMClient
 from researchclaw.prompts import PromptManager
+from researchclaw.pipeline.control_state import (
+    active_backend_name,
+    append_supervisor_event,
+    control_action_for_result,
+    read_control_state,
+    summarize_control_state,
+    stage_observer_snapshot,
+    update_notification_state,
+    write_control_state,
+)
 from researchclaw.pipeline.stages import (
+    ControlAction,
     NEXT_STAGE,
     Stage,
     StageStatus,
@@ -476,13 +487,152 @@ def _safe_notify(
     *,
     subject: str,
     body: str,
+    run_dir: Path | None = None,
 ) -> None:
     if not _notify_enabled(config):
         return
     try:
         adapters.message.notify(config.notifications.channel, subject, body)
+        if run_dir is not None:
+            update_notification_state(run_dir, subject=subject, status="sent")
+            delivery = getattr(adapters.message, "last_delivery", None)
+            attempts = 1
+            retried = False
+            duration_sec = None
+            if isinstance(delivery, dict):
+                attempts = int(delivery.get("attempts") or 1)
+                retried = bool(delivery.get("retried"))
+                raw_duration = delivery.get("duration_sec")
+                if isinstance(raw_duration, (int, float)):
+                    duration_sec = float(raw_duration)
+            append_supervisor_event(
+                run_dir,
+                event_type="notification_sent",
+                status="info",
+                summary=f"Notification sent: {subject}",
+                payload={
+                    "subject": subject,
+                    "attempts": attempts,
+                    "retried": retried,
+                    "duration_sec": duration_sec,
+                },
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Notification failed for %s: %s", subject, exc)
+        if run_dir is not None:
+            update_notification_state(
+                run_dir,
+                subject=subject,
+                status="failed",
+                error=str(exc),
+            )
+            delivery = getattr(adapters.message, "last_delivery", None)
+            attempts = 1
+            duration_sec = None
+            if isinstance(delivery, dict):
+                attempts = int(delivery.get("attempts") or 1)
+                raw_duration = delivery.get("duration_sec")
+                if isinstance(raw_duration, (int, float)):
+                    duration_sec = float(raw_duration)
+            append_supervisor_event(
+                run_dir,
+                event_type="notification_failed",
+                status="error",
+                summary=f"Notification failed: {subject}",
+                alerts=["notification_failed"],
+                payload={
+                    "subject": subject,
+                    "attempts": attempts,
+                    "duration_sec": duration_sec,
+                    "error": str(exc),
+                },
+            )
+
+
+def _write_backend_health_snapshot(
+    *,
+    run_dir: Path,
+    run_id: str,
+    stage: Stage,
+    config: RCConfig,
+    llm: Any | None,
+) -> None:
+    if config.llm.provider != "acp" or llm is None:
+        return
+    describe = getattr(llm, "describe_backend_health", None)
+    if not callable(describe):
+        return
+    try:
+        backend_state = describe()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Backend health snapshot failed: %s", exc, exc_info=True)
+        return
+    if not isinstance(backend_state, dict):
+        return
+
+    selected_backend = str(
+        backend_state.get("selected_backend")
+        or backend_state.get("active_backend")
+        or active_backend_name(config)
+    )
+    previous_state = read_control_state(run_dir)
+    previous_backend = str(previous_state.get("active_session_backend") or "")
+    write_control_state(
+        run_dir,
+        run_id=run_id,
+        current_stage=int(stage),
+        current_stage_name=stage.name,
+        active_session_backend=selected_backend,
+        session_backend_state=backend_state,
+        observers={
+            "session_health": {
+                "backend": selected_backend,
+                "healthy": not bool(backend_state.get("degraded")),
+                "backend_order": list(backend_state.get("backend_order") or []),
+                "gateway_healthy": bool(backend_state.get("gateway_healthy")),
+                "named_sessions_usable": backend_state.get("named_sessions_usable"),
+                "session_ready": bool(backend_state.get("session_ready")),
+            }
+        },
+    )
+    if previous_backend and previous_backend != selected_backend:
+        append_supervisor_event(
+            run_dir,
+            event_type="session_switched",
+            status="warning" if bool(backend_state.get("degraded")) else "info",
+            summary=(
+                f"Session backend switched from {previous_backend} "
+                f"to {selected_backend}."
+            ),
+            stage=int(stage),
+            stage_name=stage.name,
+            backend=selected_backend,
+            payload={
+                "from_backend": previous_backend,
+                "to_backend": selected_backend,
+                "backend_order": list(backend_state.get("backend_order") or []),
+                "gateway_healthy": bool(backend_state.get("gateway_healthy")),
+            },
+        )
+    elif bool(backend_state.get("degraded")) and not previous_backend:
+        append_supervisor_event(
+            run_dir,
+            event_type="session_unhealthy",
+            status="warning",
+            summary=(
+                "Session backend is running in degraded mode: "
+                f"{selected_backend}."
+            ),
+            stage=int(stage),
+            stage_name=stage.name,
+            backend=selected_backend,
+            alerts=["session_degraded"],
+            payload={
+                "backend_order": list(backend_state.get("backend_order") or []),
+                "gateway_healthy": bool(backend_state.get("gateway_healthy")),
+                "named_sessions_usable": backend_state.get("named_sessions_usable"),
+            },
+        )
 
 
 def _read_textish_artifact(path: Path) -> str:
@@ -610,17 +760,24 @@ def _build_stage_completion_body(
 def _build_stage_failure_body(
     *,
     stage: Stage,
+    run_dir: Path,
     run_id: str,
     result: StageResult,
 ) -> str:
-    return "\n".join(
-        [
-            f"Run: {run_id}",
-            f"Stage {int(stage):02d} {stage.name} failed.",
-            f"Decision: {result.decision}",
-            f"Error: {result.error or 'unknown error'}",
-        ]
-    )
+    lines = [
+        f"Run: {run_id}",
+        f"Stage {int(stage):02d} {stage.name} failed.",
+        f"Decision: {result.decision}",
+        f"Error: {result.error or 'unknown error'}",
+    ]
+    summary = summarize_control_state(run_dir)
+    headline = str(summary.get("headline") or "").strip()
+    alerts = summary.get("alerts")
+    if headline:
+        lines.append(f"Focus: {headline}")
+    if isinstance(alerts, list) and alerts:
+        lines.append("Alerts: " + ", ".join(str(item) for item in alerts[:4]))
+    return "\n".join(lines)
 
 
 def execute_stage(
@@ -660,9 +817,30 @@ def execute_stage(
             config,
             subject=f"stage-{int(stage):02d}-start",
             body=f"Starting {stage.name}",
+            run_dir=run_dir,
         )
     if bridge.use_memory:
         adapters.memory.append("stages", f"{run_id}:{int(stage)}:running")
+
+    write_control_state(
+        run_dir,
+        run_id=run_id,
+        current_stage=int(stage),
+        current_stage_name=stage.name,
+        current_substep="execute_stage",
+        current_action=ControlAction.PROCEED.value,
+        active_session_backend=active_backend_name(config),
+        overall_status=StageStatus.RUNNING.value,
+        waiting_reason="",
+        observers=stage_observer_snapshot(
+            run_dir,
+            stage=stage,
+            run_id=run_id,
+            current_action=ControlAction.PROCEED,
+            status=StageStatus.RUNNING,
+            substep="execute_stage",
+        ),
+    )
 
     llm = None
     try:
@@ -675,6 +853,14 @@ def execute_stage(
     except Exception as _llm_exc:  # noqa: BLE001
         logger.warning("LLM client creation failed: %s", _llm_exc)
         llm = None
+
+    _write_backend_health_snapshot(
+        run_dir=run_dir,
+        run_id=run_id,
+        stage=stage,
+        config=config,
+        llm=llm,
+    )
 
     try:
         _ = advance(stage, StageStatus.PENDING, TransitionEvent.START)
@@ -784,6 +970,23 @@ def execute_stage(
                                     decision="retry",
                                     evidence_refs=result.evidence_refs,
                                 )
+                                append_supervisor_event(
+                                    run_dir,
+                                    event_type="quality_gate_blocked",
+                                    status="error",
+                                    summary=(
+                                        f"PRM quality gate rejected Stage {int(stage):02d} "
+                                        f"{stage.name} output."
+                                    ),
+                                    stage=int(stage),
+                                    stage_name=stage.name,
+                                    alerts=["quality_gate_blocked"],
+                                    payload={
+                                        "prm_score": prm_score,
+                                        "model": prm_gate.model,
+                                        "votes": prm_gate.votes,
+                                    },
+                                )
     except Exception:  # noqa: BLE001
         logger.warning("MetaClaw PRM evaluation failed (non-blocking)")
 
@@ -806,7 +1009,21 @@ def execute_stage(
                     config,
                     subject=f"gate-{int(stage):02d}",
                     body=f"Approval required for {stage.name}",
+                    run_dir=run_dir,
                 )
+            append_supervisor_event(
+                run_dir,
+                event_type="human_review_needed",
+                status="warning",
+                summary=f"Human approval is required before Stage {int(stage):02d} can proceed.",
+                stage=int(stage),
+                stage_name=stage.name,
+                alerts=["human_review_needed"],
+                payload={
+                    "gate_stage": int(stage),
+                    "gate_stage_name": stage.name,
+                },
+            )
 
     if bridge.use_memory:
         adapters.memory.append("stages", f"{run_id}:{int(stage)}:{result.status.value}")
@@ -842,13 +1059,72 @@ def execute_stage(
                 result=result,
                 duration_sec=stage_health["duration_sec"],
             ),
+            run_dir=run_dir,
         )
     elif result.status == StageStatus.FAILED and config.notifications.on_stage_fail:
         _safe_notify(
             adapters,
             config,
             subject=f"stage-{int(stage):02d}-fail",
-            body=_build_stage_failure_body(stage=stage, run_id=run_id, result=result),
+            body=_build_stage_failure_body(stage=stage, run_dir=run_dir, run_id=run_id, result=result),
+            run_dir=run_dir,
         )
+
+    action = control_action_for_result(result)
+    waiting_reason = ""
+    if action == ControlAction.REQUEST_HUMAN_GATE:
+        waiting_reason = f"Approval required for {stage.name}"
+    elif result.error:
+        waiting_reason = result.error
+
+    if stage == Stage.QUALITY_GATE and result.status != StageStatus.DONE:
+        append_supervisor_event(
+            run_dir,
+            event_type="quality_gate_blocked",
+            status="error" if result.status == StageStatus.FAILED else "warning",
+            summary=(
+                f"Stage {int(stage):02d} QUALITY_GATE did not pass cleanly: "
+                f"{result.error or result.decision or result.status.value}."
+            ),
+            stage=int(stage),
+            stage_name=stage.name,
+            alerts=["quality_gate_blocked"],
+            payload={
+                "decision": result.decision,
+                "stage_status": result.status.value,
+                "error": result.error or "",
+            },
+        )
+    write_control_state(
+        run_dir,
+        run_id=run_id,
+        current_stage=int(stage),
+        current_stage_name=stage.name,
+        current_substep="stage_complete",
+        current_action=action.value,
+        overall_status=result.status.value,
+        waiting_reason=waiting_reason,
+        latest_stage_result={
+            "stage": int(stage),
+            "stage_name": stage.name,
+            "status": result.status.value,
+            "decision": result.decision,
+            "error": result.error or "",
+            "artifacts": list(result.artifacts),
+            "evidence_refs": list(result.evidence_refs),
+        },
+        observers=stage_observer_snapshot(
+            run_dir,
+            stage=stage,
+            run_id=run_id,
+            result=result,
+            stage_dir=stage_dir,
+            artifact_refs=result.artifacts,
+            current_action=action,
+            status=result.status,
+            substep="stage_complete",
+            waiting_reason=waiting_reason,
+        ),
+    )
 
     return result

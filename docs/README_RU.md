@@ -61,7 +61,6 @@
 
 ## 馃敟 袧芯胁芯褋褌懈
 - **[22.03.2026]** [v0.3.2](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.2) 鈥?**袣褉芯褋褋锌谢邪褌褎芯褉屑械薪薪邪褟 锌芯写写械褉卸泻邪 + 泻褉褍锌薪芯械 芯斜薪芯胁谢械薪懈械 褋褌邪斜懈谢褜薪芯褋褌懈** 鈥?AutoResearchClaw 褌械锌械褉褜 褉邪斜芯褌邪械褌 褋 谢褞斜褘屑 ACP-褋芯胁屑械褋褌懈屑褘屑 邪谐械薪褌芯屑 (Claude Code, Codex CLI, Copilot CLI, Gemini CLI, Kimi CLI) 懈 锌芯写写械褉卸懈胁邪械褌 屑械褋褋械薪写卸械褉褘 (Discord, Telegram, Lark, WeChat) 褔械褉械蟹 屑芯褋褌 OpenClaw. 袧芯胁褘泄 CLI-agent 斜褝泻械薪写 谐械薪械褉邪褑懈懈 泻芯写邪 写械谢械谐懈褉褍械褌 Stage 10 懈 13 胁薪械褕薪懈屑 CLI-邪谐械薪褌邪屑 褋 泻芯薪褌褉芯谢械屑 斜褞写卸械褌邪 懈 褍锌褉邪胁谢械薪懈械屑 褌邪泄屑邪褍褌邪屑懈. 袙泻谢褞褔邪械褌 褋懈褋褌械屑褍 蟹邪褖懈褌褘 芯褌 褎邪斜褉懈泻邪褑懈懈 (VerifiedRegistry + 褑懈泻谢 写懈邪谐薪芯褋褌懈泻懈 懈 褉械屑芯薪褌邪 褝泻褋锌械褉懈屑械薪褌芯胁), 100+ 懈褋锌褉邪胁谢械薪懈泄 斜邪谐芯胁, 屑芯写褍谢褜薪褘泄 褉械褎邪泻褌芯褉懈薪谐 executor, 邪胁褌芯芯锌褉械写械谢械薪懈械 `--resume`, 褍褋懈谢械薪懈械 锌芯胁褌芯褉芯胁 LLM 懈 懈褋锌褉邪胁谢械薪懈褟 芯褌 褋芯芯斜褖械褋褌胁邪.
-- **[18.03.2026]** [v0.3.1](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.1) 鈥?**OpenCode Beast Mode + 袣芯薪褌褉懈斜褜褞褌褘 褋芯芯斜褖械褋褌胁邪** 鈥?袧芯胁褘泄 褉械卸懈屑 "Beast Mode" 锌械褉械薪邪锌褉邪胁谢褟械褌 褋谢芯卸薪褍褞 谐械薪械褉邪褑懈褞 泻芯写邪 胁 [OpenCode](https://github.com/anomalyco/opencode) 褋 邪胁褌芯屑邪褌懈褔械褋泻芯泄 芯褑械薪泻芯泄 褋谢芯卸薪芯褋褌懈 懈 斜械蟹芯锌邪褋薪褘屑 褎芯谢谢斜褝泻芯屑. 袛芯斜邪胁谢械薪邪 锌芯写写械褉卸泻邪 锌褉芯胁邪泄写械褉邪 Novita AI, 褍谢褍褔褕械薪邪 锌芯褌芯泻芯斜械蟹芯锌邪褋薪芯褋褌褜, 锌芯胁褘褕械薪邪 薪邪写械卸薪芯褋褌褜 锌邪褉褋懈薪谐邪 芯褌胁械褌芯胁 LLM, 邪 褌邪泻卸械 懈褋锌褉邪胁谢械薪芯 斜芯谢械械 20 斜邪谐芯胁 斜谢邪谐芯写邪褉褟 PR 芯褌 褋芯芯斜褖械褋褌胁邪 懈 胁薪褍褌褉械薪薪械屑褍 邪褍写懈褌褍.
 - **[17.03.2026]** [v0.3.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.0) 鈥?**袠薪褌械谐褉邪褑懈褟 褋 MetaClaw** 鈥?AutoResearchClaw 褌械锌械褉褜 锌芯写写械褉卸懈胁邪械褌 泻褉芯褋褋-褋械褋褋懈芯薪薪芯械 芯斜褍褔械薪懈械 褔械褉械蟹 [MetaClaw](https://github.com/aiming-lab/MetaClaw): 芯褕懈斜泻懈 锌邪泄锌谢邪泄薪邪 鈫?褋褌褉褍泻褌褍褉懈褉芯胁邪薪薪褘械 褍褉芯泻懈 鈫?锌械褉械懈褋锌芯谢褜蟹褍械屑褘械 薪邪胁褘泻懈, 泻芯褌芯褉褘械 胁薪械写褉褟褞褌褋褟 胁芯 胁褋械 23 褝褌邪锌邪. 袪芯斜邪褋褌薪芯褋褌褜 胁 泻芯薪褌褉芯谢懈褉褍械屑褘褏 褝泻褋锌械褉懈屑械薪褌邪褏 胁褘褉芯褋谢邪 薪邪 **+18.3%**. 肖懈褔邪 芯锌褑懈芯薪邪谢褜薪邪 (`metaclaw_bridge.enabled: true`) 懈 锌芯谢薪芯褋褌褜褞 芯斜褉邪褌薪芯 褋芯胁屑械褋褌懈屑邪. 小屑. [袪褍泻芯胁芯写褋褌胁芯 锌芯 懈薪褌械谐褉邪褑懈懈](#-懈薪褌械谐褉邪褑懈褟-褋-metaclaw).
 - **[16.03.2026]** [v0.2.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.2.0) 鈥?孝褉懈 屑褍谢褜褌懈邪谐械薪褌薪褘械 锌芯写褋懈褋褌械屑褘 (CodeAgent, BenchmarkAgent, FigureAgent), 蟹邪褖懈褖械薪薪邪褟 Docker-锌械褋芯褔薪懈褑邪 褋 锌芯写写械褉卸泻芯泄 褋械褌械胁褘褏 锌芯谢懈褌懈泻, 4-褝褌邪锌薪褘泄 邪褍写懈褌 泻邪褔械褋褌胁邪 褋褌邪褌褜懈 (锌芯懈褋泻 袠袠-谐邪谢谢褞褑懈薪邪褑懈泄, 芯褑械薪泻邪 锌芯 7 泻褉懈褌械褉懈褟屑, 褔械泻-谢懈褋褌 NeurIPS) 懈 斜芯谢械械 15 懈褋锌褉邪胁谢械薪懈泄 斜邪谐芯胁 褋 锌褉芯写邪泻褕械薪邪.
 - **[15.03.2026]** [v0.1.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.1.0) 鈥?袪械谢懈蟹 AutoResearchClaw: 锌芯谢薪芯褋褌褜褞 邪胁褌芯薪芯屑薪褘泄 懈褋褋谢械写芯胁邪褌械谢褜褋泻懈泄 锌邪泄锌谢邪泄薪 懈蟹 23 褝褌邪锌芯胁, 泻芯褌芯褉褘泄 锌褉械胁褉邪褖邪械褌 芯写薪褍 懈写械褞 胁 谐芯褌芯胁褍褞 写谢褟 泻芯薪褎械褉械薪褑懈懈 褋褌邪褌褜褞. 袘械蟹 胁屑械褕邪褌械谢褜褋褌胁邪 褔械谢芯胁械泻邪.
@@ -107,7 +106,6 @@ cd My-Own-PhD-Students
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-# 2. 袧邪褋褌褉芯泄泻邪 (懈薪褌械褉邪泻褌懈胁薪邪褟 鈥?褍褋褌邪薪邪胁谢懈胁邪械褌 OpenCode beast mode, 锌褉芯胁械褉褟械褌 Docker/LaTeX)
 researchclaw setup
 
 # 3. 袣芯薪褎懈谐褍褉邪褑懈褟
@@ -221,7 +219,6 @@ AutoResearchClaw 屑芯卸械褌 懈褋锌芯谢褜蟹芯胁邪褌褜 **谢褞�
 | Codex CLI | `codex` | OpenAI |
 | Copilot CLI | `gh` | GitHub |
 | Gemini CLI | `gemini` | Google |
-| OpenCode | `opencode` | SST |
 | Kimi CLI | `kimi` | Moonshot |
 
 ```yaml
@@ -247,7 +244,6 @@ researchclaw run --config config.yaml --topic "袙邪褕邪 懈写械褟" --auto
 | **Python API** | `from researchclaw.pipeline import Runner; Runner(config).run()` |
 | **Claude Code** | 效懈褌邪械褌 `RESEARCHCLAW_CLAUDE.md` 鈥?锌褉芯褋褌芯 薪邪锌懈褕懈褌械 *"Run research on [topic]"* |
 | **Copilot CLI** | `researchclaw run --topic "..."` 褋 `llm.acp.agent: "gh"` |
-| **OpenCode** | 效懈褌邪械褌 `.claude/skills/` 鈥?褌邪泻芯泄 卸械 懈薪褌械褉褎械泄褋 薪邪 械褋褌械褋褌胁械薪薪芯屑 褟蟹褘泻械 |
 | **袥褞斜芯泄 AI CLI** | 小泻芯褉屑懈褌械 `RESEARCHCLAW_AGENTS.md` 胁 泻芯薪褌械泻褋褌 鈫?邪谐械薪褌 褋邪屑 锌芯泄屑械褌, 褔褌芯 写械谢邪褌褜 |
 
 ---
@@ -306,7 +302,6 @@ researchclaw run --config config.yaml --topic "袙邪褕邪 懈写械褟" --auto
 | **馃摎 袦褍谢褜褌懈懈褋褌芯褔薪懈泻芯胁邪褟 谢懈褌械褉邪褌褍褉邪** | 袪械邪谢褜薪褘械 褋褌邪褌褜懈 懈蟹 OpenAlex, Semantic Scholar 懈 arXiv 鈥?褉邪褋褕懈褉械薪懈械 蟹邪锌褉芯褋芯胁, 写械写褍锌谢懈泻邪褑懈褟, 蟹邪褖懈褌邪 芯褌 锌邪写械薪懈泄 API 褋 锌芯褋褌械锌械薪薪芯泄 写械谐褉邪写邪褑懈械泄. |
 | **馃攳 4-褍褉芯胁薪械胁邪褟 锌褉芯胁械褉泻邪 褑懈褌邪褌** | 袩褉芯胁械褉泻邪 arXiv ID 鈫?CrossRef/DataCite DOI 鈫?褋芯胁锌邪写械薪懈械 蟹邪谐芯谢芯胁泻芯胁 胁 Semantic Scholar 鈫?芯褑械薪泻邪 褉械谢械胁邪薪褌薪芯褋褌懈 褔械褉械蟹 LLM. 袙褘写褍屑邪薪薪褘械 褋褋褘谢泻懈 褍写邪谢褟褞褌褋褟 邪胁褌芯屑邪褌懈褔械褋泻懈. |
 | **馃枼锔?袗写邪锌褌邪褑懈褟 锌芯写 卸械谢械蟹芯** | 袗胁褌芯芯锌褉械写械谢械薪懈械 GPU (NVIDIA CUDA / Apple MPS / CPU) 懈 邪写邪锌褌邪褑懈褟 谐械薪械褉邪褑懈懈 泻芯写邪, 懈屑锌芯褉褌芯胁 懈 屑邪褋褕褌邪斜邪 褝泻褋锌械褉懈屑械薪褌芯胁. |
-| **馃 OpenCode Beast Mode** | 小谢芯卸薪褘械 褝泻褋锌械褉懈屑械薪褌褘 邪胁褌芯屑邪褌懈褔械褋泻懈 锌械褉械薪邪锌褉邪胁谢褟褞褌褋褟 胁 [OpenCode](https://github.com/anomalyco/opencode) 鈥?谐械薪械褉邪褑懈褟 屑薪芯谐芯褎邪泄谢芯胁褘褏 锌褉芯械泻褌芯胁 褋 泻邪褋褌芯屑薪褘屑懈 邪褉褏懈褌械泻褌褍褉邪屑懈, 褑懈泻谢邪屑懈 芯斜褍褔械薪懈褟 懈 ablation studies. 校褋褌邪薪邪胁谢懈胁邪械褌褋褟 褔械褉械蟹 `researchclaw setup`. |
 | **馃И 协泻褋锌械褉懈屑械薪褌褘 胁 锌械褋芯褔薪懈褑械** | 袙邪谢懈写邪褑懈褟 泻芯写邪 褔械褉械蟹 AST, 薪械懈蟹屑械薪褟械屑邪褟 芯斜胁褟蟹泻邪, 斜褘褋褌褉褘泄 芯褌泻邪蟹 锌褉懈 NaN/Inf, 褋邪屑芯胁芯褋褋褌邪薪芯胁谢械薪懈械, 懈褌械褉邪褌懈胁薪芯械 褍谢褍褔褕械薪懈械 (写芯 10 褉邪褍薪写芯胁), 褋芯褏褉邪薪械薪懈械 褔邪褋褌懈褔薪褘褏 褉械蟹褍谢褜褌邪褌芯胁. |
 | **馃摑 袧邪锌懈褋邪薪懈械 褍褉芯胁薪褟 泻芯薪褎械褉械薪褑懈泄** | 楔邪斜谢芯薪褘 NeurIPS/ICML/ICLR, 薪邪锌懈褋邪薪懈械 锌芯 褉邪蟹写械谢邪屑 (5,000-6,500 褋谢芯胁), 蟹邪褖懈褌邪 芯褌 胁褘写褍屑邪薪薪褘褏 褎邪泻褌芯胁, 泻芯薪褌褉芯谢褜 芯斜褗械屑邪 锌褉懈 褉械写邪泻褌褍褉械, 褍写邪谢械薪懈械 褌懈锌懈褔薪褘褏 袠袠-芯谐芯胁芯褉芯泻. |
 | **馃搻 袩械褉械泻谢褞褔械薪懈械 褕邪斜谢芯薪芯胁** | `neurips_2025`, `iclr_2026`, `icml_2026` 鈥?Markdown 鈫?LaTeX 褋 褎芯褉屑褍谢邪屑懈, 褌邪斜谢懈褑邪屑懈, 谐褉邪褎懈泻邪屑懈, 锌械褉械泻褉械褋褌薪褘屑懈 褋褋褘谢泻邪屑懈 懈 `\cite{}`. |
@@ -445,12 +440,10 @@ experiment:
     host: ""                       # 啸芯褋褌薪械泄屑 GPU-褋械褉胁械褉邪
     gpu_ids: []                    # 袛芯褋褌褍锌薪褘械 ID 胁懈写械芯泻邪褉褌
     remote_workdir: "/tmp/researchclaw_experiments"
-  opencode:                          # OpenCode Beast Mode (褍褋褌邪薪邪胁谢懈胁邪械褌褋褟 褔械褉械蟹 `researchclaw setup`)
     enabled: true                    # 袚谢邪胁薪褘泄 褉褍斜懈谢褜薪懈泻 (锌芯 褍屑芯谢褔邪薪懈褞: true)
     auto: true                       # 袗胁褌芯蟹邪锌褍褋泻 斜械蟹 锌芯写褌胁械褉卸写械薪懈褟 (锌芯 褍屑芯谢褔邪薪懈褞: true)
     complexity_threshold: 0.2        # 0.0-1.0 鈥?褔械屑 胁褘褕械, 褌械屑 褉械卸械 褌褉懈谐谐械褉懈褌褋褟 (褌芯谢褜泻芯 薪邪 褋谢芯卸薪褘褏 蟹邪写邪褔邪褏)
     model: ""                        # 袩械褉械芯锌褉械写械谢械薪懈械 屑芯写械谢懈 (锌褍褋褌芯 = 懈褋锌芯谢褜蟹芯胁邪褌褜 llm.primary_model)
-    timeout_sec: 600                 # 袦邪泻褋. 胁褉械屑褟 薪邪 谐械薪械褉邪褑懈褞 胁 OpenCode
     max_retries: 1                   # 袣芯谢懈褔械褋褌胁芯 褉械褌褉邪械胁 锌褉懈 锌邪写械薪懈懈
     workspace_cleanup: true          # 校写邪谢褟褌褜 胁褉械屑械薪薪褘泄 胁芯褉泻褋锌械泄褋 锌芯褋谢械 褋斜芯褉邪 褉械蟹褍谢褜褌邪褌芯胁
 

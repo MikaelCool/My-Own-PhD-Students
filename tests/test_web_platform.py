@@ -17,6 +17,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
 # ---------------------------------------------------------------------------
 # Config tests
 # ---------------------------------------------------------------------------
@@ -569,6 +574,75 @@ class TestDialogRouter:
         response = await route_message("What's the current progress?", "test-client-3")
         assert isinstance(response, str)
 
+    @pytest.mark.anyio
+    async def test_route_status_message_includes_observer_summary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, anyio_backend: str
+    ) -> None:
+        assert anyio_backend == "asyncio"
+        from researchclaw import dashboard
+        from researchclaw.dashboard.collector import RunSnapshot
+        from researchclaw.server.dialog import router as dialog_router
+
+        run_dir = tmp_path / "artifacts" / "rc-20260420-000000-abc123"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run_control_state.json").write_text(
+            json.dumps(
+                {
+                    "current_stage": 12,
+                    "current_stage_name": "EXPERIMENT_RUN",
+                    "current_substep": "gpu-wait-heartbeat",
+                    "waiting_reason": "ResearchClaw is still waiting for up to two process-free GPUs.",
+                    "observers": {
+                        "stage_progress": {
+                            "current_stage": 12,
+                            "current_stage_name": "EXPERIMENT_RUN",
+                            "current_substep": "gpu-wait-heartbeat",
+                            "status": "running",
+                            "waiting_reason": "ResearchClaw is still waiting for up to two process-free GPUs.",
+                        },
+                        "session_health": {"backend": "openai-compatible"},
+                        "resource_state": {
+                            "waiting": True,
+                            "waiting_reason": "ResearchClaw is still waiting for up to two process-free GPUs.",
+                        },
+                        "risk_flags": [],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "stage-12").mkdir()
+        (run_dir / "stage-12" / "runtime_observer.json").write_text(
+            json.dumps(
+                {
+                    "dataset_readiness": {"status": "ready", "summary": "Dataset requirements are declared before runtime execution."},
+                    "gpu_availability": {"status": "waiting", "summary": "All allowed GPUs are currently busy; runtime is waiting for a process-free card."},
+                    "runtime_watchdog": {"status": "active", "summary": "Runtime watchdog has no hard signal yet."},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        def _fake_collect_all(self):  # type: ignore[no-untyped-def]
+            return [
+                RunSnapshot(
+                    run_id=run_dir.name,
+                    path=str(run_dir),
+                    status="running",
+                    current_stage=12,
+                    current_stage_name="EXPERIMENT_RUN",
+                    is_active=True,
+                    topic="observer test",
+                )
+            ]
+
+        monkeypatch.setattr(dashboard.collector.DashboardCollector, "collect_all", _fake_collect_all)
+
+        response = await dialog_router.route_message("status", "test-client-status-observer")
+        assert "Focus:" in response
+        assert "Alerts:" in response
+        assert "gpu:waiting" in response
+
 
 # ---------------------------------------------------------------------------
 # FastAPI app tests (requires fastapi + httpx)
@@ -637,6 +711,99 @@ class TestFastAPIApp:
             resp = await ac.get("/api/pipeline/status")
             assert resp.status_code == 200
             assert resp.json()["status"] == "idle"
+
+    @pytest.mark.anyio
+    async def test_pipeline_status_includes_observer_summary(
+        self, tmp_path: Path, app: object, monkeypatch: pytest.MonkeyPatch, anyio_backend: str
+    ) -> None:
+        assert anyio_backend == "asyncio"
+        from httpx import AsyncClient, ASGITransport
+        from researchclaw.server.routes import pipeline as pipeline_routes
+
+        run_dir = tmp_path / "artifacts" / "rc-20260420-010101-abc123"
+        run_dir.mkdir(parents=True)
+        (run_dir / "checkpoint.json").write_text(
+            json.dumps({"stage": 12, "stage_name": "EXPERIMENT_RUN", "status": "running", "topic": "observer test"}),
+            encoding="utf-8",
+        )
+        (run_dir / "heartbeat.json").write_text(
+            json.dumps({"timestamp": "2026-04-20T00:00:00+00:00"}),
+            encoding="utf-8",
+        )
+        (run_dir / "run_control_state.json").write_text(
+            json.dumps(
+                {
+                    "current_stage": 12,
+                    "current_stage_name": "EXPERIMENT_RUN",
+                    "current_substep": "stage_complete",
+                    "current_action": "retry_same_step",
+                    "waiting_reason": "",
+                    "active_session_backend": "openai-compatible",
+                    "observers": {
+                        "stage_progress": {
+                            "current_stage": 12,
+                            "current_stage_name": "EXPERIMENT_RUN",
+                            "current_substep": "stage_complete",
+                            "status": "failed",
+                            "waiting_reason": "",
+                        },
+                        "session_health": {"backend": "openai-compatible"},
+                        "resource_state": {"waiting": False, "waiting_reason": ""},
+                        "risk_flags": ["stage_failed"],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "stage-12").mkdir()
+        (run_dir / "stage-12" / "runtime_observer.json").write_text(
+            json.dumps(
+                {
+                    "dataset_readiness": {"status": "blocked", "summary": "Dataset preparation is blocked by preflight errors."},
+                    "gpu_availability": {"status": "ready", "summary": "Process-free GPUs detected."},
+                    "runtime_watchdog": {"status": "failed", "summary": "Stage 12 failed before exhausting the time budget."},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "run_index.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "events": [
+                        {
+                            "event": "supervisor_event",
+                            "timestamp": "2026-04-20T00:00:00+00:00",
+                            "event_type": "gpu_waiting",
+                            "status": "warning",
+                            "summary": "ResearchClaw is still waiting for process-free GPUs.",
+                            "alerts": ["gpu:waiting"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(
+            pipeline_routes,
+            "_active_run",
+            {
+                "run_id": run_dir.name,
+                "status": "running",
+                "output_dir": str(run_dir),
+                "topic": "observer test",
+            },
+        )
+
+        transport = ASGITransport(app=app)  # type: ignore[arg-type]
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.get("/api/pipeline/status")
+            assert resp.status_code == 200
+            payload = resp.json()
+            assert payload["observer_summary"]["headline"] == "Dataset preparation is blocked by preflight errors."
+            assert "dataset:blocked" in payload["observer_summary"]["alerts"]
+            assert payload["supervisor_events"][-1]["event_type"] == "gpu_waiting"
 
     @pytest.mark.asyncio
     async def test_pipeline_stages(self, app: object) -> None:

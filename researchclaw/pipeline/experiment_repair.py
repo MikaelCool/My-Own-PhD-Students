@@ -2,7 +2,7 @@
 
 Orchestrates the cycle:
   1. Diagnose failures (``experiment_diagnosis.py``)
-  2. Generate fixes via OpenCode or LLM
+  2. Generate fixes via LLM
   3. Re-run experiment in sandbox/Docker
   4. Re-assess quality
   5. Repeat until sufficient or max cycles reached
@@ -97,7 +97,7 @@ def build_repair_prompt(
     experiment_plan: dict | None = None,
     time_budget_sec: int = 2400,
 ) -> str:
-    """Build a structured repair prompt for OpenCode or LLM.
+    """Build a structured repair prompt for code-generation LLMs.
 
     Parameters
     ----------
@@ -113,7 +113,7 @@ def build_repair_prompt(
     Returns
     -------
     str
-        A formatted prompt suitable for OpenCode or code-generation LLM.
+        A formatted prompt suitable for code-generation LLMs.
     """
     sections: list[str] = []
 
@@ -280,7 +280,7 @@ def run_repair_loop(
 
     After Stage 14 diagnosis finds quality issues:
     1. Load current experiment code
-    2. For each cycle: diagnose → LLM/OpenCode fix → re-run in sandbox → re-assess
+    2. For each cycle: diagnose → LLM fix → re-run in sandbox → re-assess
     3. Select best results across all cycles
     4. Return structured result
 
@@ -371,7 +371,7 @@ def run_repair_loop(
             time_budget_sec=config.experiment.time_budget_sec,
         )
 
-        # 3. Get fixed code via LLM (with OpenCode fallback)
+        # 3. Get fixed code via LLM
         fixed_code = _get_repaired_code(
             repair_prompt, code, llm, config, run_dir, cycle,
         )
@@ -609,7 +609,7 @@ def _collect_experiment_output(run_dir: Path) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Helper: get repaired code from LLM or OpenCode
+# Helper: get repaired code from LLM
 # ---------------------------------------------------------------------------
 
 
@@ -621,69 +621,11 @@ def _get_repaired_code(
     run_dir: Path,
     cycle: int,
 ) -> dict[str, str] | None:
-    """Get repaired code via OpenCode (if available) or LLM fallback.
+    """Get repaired code via LLM.
 
     Returns merged code dict (current + repaired files) or None on failure.
     """
-    repair_cfg = config.experiment.repair
-
-    # Try OpenCode first if enabled
-    if repair_cfg.use_opencode and config.experiment.opencode.enabled:
-        result = _repair_via_opencode(repair_prompt, current_code, config, run_dir, cycle)
-        if result:
-            return result
-        logger.info("OpenCode repair unavailable, falling back to LLM")
-
-    # LLM repair
     return _repair_via_llm(repair_prompt, current_code, llm)
-
-
-def _repair_via_opencode(
-    repair_prompt: str,
-    current_code: dict[str, str],
-    config: Any,
-    run_dir: Path,
-    cycle: int,
-) -> dict[str, str] | None:
-    """Attempt repair via OpenCode agent."""
-    try:
-        from researchclaw.pipeline.opencode_bridge import OpenCodeBridge
-
-        _oc_cfg = config.experiment.opencode
-        bridge = OpenCodeBridge(
-            model=getattr(_oc_cfg, "model", "") or "",
-            llm_base_url=getattr(config.llm, "base_url", "") or "",
-            api_key_env=getattr(config.llm, "api_key_env", "") or "",
-            llm_provider=getattr(config.llm, "provider", "openai-compatible") or "openai-compatible",
-            timeout_sec=getattr(_oc_cfg, "timeout_sec", 600),
-            max_retries=getattr(_oc_cfg, "max_retries", 1),
-            workspace_cleanup=getattr(_oc_cfg, "workspace_cleanup", True),
-        )
-        workspace = run_dir / f"_repair_opencode_v{cycle}"
-        workspace.mkdir(parents=True, exist_ok=True)
-
-        result = bridge.generate(
-            stage_dir=workspace,
-            topic="experiment repair",
-            exp_plan=repair_prompt,
-            metric=getattr(config.experiment, "metric_key", "primary_metric"),
-            time_budget_sec=getattr(config.experiment, "time_budget_sec", 2400),
-        )
-
-        if result.success and result.files:
-            # Merge with current code
-            merged = dict(current_code)
-            merged.update(result.files)
-            logger.info(
-                "OpenCode repair: %d files generated (%d total after merge)",
-                len(result.files), len(merged),
-            )
-            return merged
-
-    except Exception as exc:
-        logger.warning("OpenCode repair failed: %s", exc)
-
-    return None
 
 
 def _repair_via_llm(

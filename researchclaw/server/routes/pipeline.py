@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,12 @@ from pydantic import BaseModel
 
 from researchclaw.config import RCConfig
 from researchclaw.dashboard.collector import DashboardCollector
+from researchclaw.pipeline.control_state import (
+    recent_supervisor_events,
+    read_control_state,
+    summarize_control_state,
+    write_control_state,
+)
 from researchclaw.project.manager import ProjectManager
 
 logger = logging.getLogger(__name__)
@@ -54,6 +62,7 @@ class PipelineStartResponse(BaseModel):
 
 _active_run: dict[str, Any] | None = None
 _run_task: asyncio.Task[Any] | None = None
+_run_process: subprocess.Popen[str] | None = None
 
 
 def _get_app_state() -> dict[str, Any]:
@@ -174,6 +183,12 @@ def _resolve_recoverable_run(
     if not wants_resume:
         return None
 
+    if config.multi_project.enabled and not req.project_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Continue requires an explicit project selection in multi-project mode.",
+        )
+
     if req.project_id:
         manager = _project_manager(config)
         recoverable = manager.latest_recoverable_run(req.project_id)
@@ -204,9 +219,9 @@ def _load_metrics(run_dir: Path) -> dict[str, Any]:
 
 @router.post("/pipeline/start", response_model=PipelineStartResponse)
 async def start_pipeline(req: PipelineStartRequest) -> PipelineStartResponse:
-    global _active_run, _run_task
+    global _active_run, _run_task, _run_process
 
-    if _active_run and _active_run.get("status") == "running":
+    if _run_process is not None and _run_process.poll() is None:
         raise HTTPException(status_code=409, detail="A pipeline is already running")
 
     state = _get_app_state()
@@ -254,6 +269,10 @@ async def start_pipeline(req: PipelineStartRequest) -> PipelineStartResponse:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
     from_stage = _resolve_from_stage(req, run_dir)
 
+    from researchclaw.pipeline.runner import clear_stop_request
+
+    clear_stop_request(run_dir)
+
     _active_run = {
         "run_id": run_id,
         "status": "running",
@@ -263,43 +282,64 @@ async def start_pipeline(req: PipelineStartRequest) -> PipelineStartResponse:
         "launch_mode": req.launch_mode or "standard_full_run",
         "from_stage": from_stage.name,
     }
+    write_control_state(
+        run_dir,
+        run_id=run_id,
+        current_stage=int(from_stage),
+        current_stage_name=from_stage.name,
+        current_substep="queued",
+        current_action="proceed",
+        overall_status="queued",
+        launch_mode=req.launch_mode or "standard_full_run",
+    )
 
     async def _run_in_background() -> None:
-        global _active_run
+        global _active_run, _run_task, _run_process
         try:
-            from researchclaw.adapters import AdapterBundle
-            from researchclaw.pipeline.runner import execute_pipeline
-
-            kb_root = Path(config.knowledge_base.root) if config.knowledge_base.root else None
-            if kb_root:
-                kb_root.mkdir(parents=True, exist_ok=True)
-
-            loop = asyncio.get_event_loop()
-            results = await loop.run_in_executor(
-                None,
-                lambda: execute_pipeline(
-                    run_dir=run_dir,
-                    run_id=run_id,
-                    config=config,
-                    adapters=AdapterBundle(),
-                    from_stage=from_stage,
-                    auto_approve_gates=req.auto_approve,
-                    stop_on_gate=not req.auto_approve,
-                    skip_noncritical=True,
-                    kb_root=kb_root,
-                ),
+            from researchclaw.pipeline.runner import execute_pipeline, stop_requested
+            config_path = str(_get_app_state().get("config_path") or "")
+            if not config_path:
+                raise RuntimeError("Server config path unavailable for pipeline subprocess")
+            cmd = [
+                sys.executable,
+                "-m",
+                "researchclaw.cli",
+                "run",
+                "--config",
+                config_path,
+                "--output",
+                str(run_dir),
+                "--skip-preflight",
+                "--skip-noncritical-stage",
+            ]
+            if req.auto_approve:
+                cmd.append("--auto-approve")
+            if wants_resume:
+                cmd.append("--resume")
+            if from_stage:
+                cmd.extend(["--from-stage", from_stage.name])
+            _run_process = subprocess.Popen(
+                cmd,
+                cwd=str(Path(config_path).resolve().parent),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
             )
-            done = sum(1 for item in results if item.status.value == "done")
-            failed = sum(1 for item in results if item.status.value == "failed")
-            final_status = "completed" if failed == 0 else "failed"
+            _active_run["pid"] = _run_process.pid
+            returncode = await asyncio.to_thread(_run_process.wait)
+            final_status = (
+                "stopped"
+                if stop_requested(run_dir) or (_active_run and _active_run.get("status") == "stopped")
+                else ("completed" if returncode == 0 else "failed")
+            )
             if _active_run:
                 _active_run["status"] = final_status
-                _active_run["stages_done"] = done
-                _active_run["stages_failed"] = failed
+                _active_run["returncode"] = returncode
+                _active_run["metrics"] = _load_metrics(run_dir)
             if manager and req.project_id:
                 summary = (
                     f"Launch mode: {req.launch_mode or 'standard_full_run'} | "
-                    f"From: {from_stage.name} | Done: {done} | Failed: {failed}"
+                    f"From: {from_stage.name} | Return code: {returncode}"
                 )
                 manager.finish_run(
                     req.project_id,
@@ -314,6 +354,9 @@ async def start_pipeline(req: PipelineStartRequest) -> PipelineStartResponse:
                 _active_run["error"] = str(exc)
             if manager and req.project_id:
                 manager.finish_run(req.project_id, "failed", summary=str(exc))
+        finally:
+            _run_task = None
+            _run_process = None
 
     _run_task = asyncio.create_task(_run_in_background())
 
@@ -327,13 +370,31 @@ async def start_pipeline(req: PipelineStartRequest) -> PipelineStartResponse:
 
 @router.post("/pipeline/stop")
 async def stop_pipeline() -> dict[str, str]:
-    global _active_run, _run_task
+    global _active_run, _run_task, _run_process
 
-    if not _run_task or not _active_run:
+    if not _active_run:
         raise HTTPException(status_code=404, detail="No pipeline is running")
 
-    _run_task.cancel()
+    run_dir = Path(str(_active_run.get("output_dir", ""))).expanduser()
+    if str(run_dir):
+        from researchclaw.pipeline.runner import request_stop
+
+        request_stop(run_dir, reason="Stopped from web workspace.")
+    try:
+        from researchclaw.experiment.docker_sandbox import DockerSandbox
+
+        DockerSandbox._cleanup_rc_exp_containers()
+    except Exception:
+        logger.debug("Failed to cleanup residual rc-exp containers during stop", exc_info=True)
+    if _run_process is not None and _run_process.poll() is None:
+        _run_process.terminate()
+        try:
+            await asyncio.wait_for(asyncio.to_thread(_run_process.wait), timeout=8)
+        except asyncio.TimeoutError:
+            _run_process.kill()
+            await asyncio.to_thread(_run_process.wait)
     _active_run["status"] = "stopped"
+    _active_run["stop_requested"] = True
     project_id = _active_run.get("project_id")
     if project_id:
         manager = _project_manager(_get_app_state()["config"])
@@ -345,6 +406,29 @@ async def stop_pipeline() -> dict[str, str]:
 async def pipeline_status() -> dict[str, Any]:
     if not _active_run:
         return {"status": "idle"}
+    output_dir = _active_run.get("output_dir")
+    if output_dir:
+        try:
+            collector = DashboardCollector(artifacts_dir=str(Path(output_dir).parent))
+            snap = collector.collect_run(Path(output_dir))
+            merged = dict(_active_run)
+            merged["status"] = snap.status
+            merged["current_stage"] = snap.current_stage
+            merged["current_stage_name"] = snap.current_stage_name
+            merged["is_active"] = snap.is_active
+            merged["error"] = snap.error or merged.get("error", "")
+            control_state = read_control_state(Path(output_dir))
+            if control_state:
+                merged["control_state"] = control_state
+                merged["current_substep"] = control_state.get("current_substep", "")
+                merged["current_action"] = control_state.get("current_action", "")
+                merged["waiting_reason"] = control_state.get("waiting_reason", "")
+                merged["active_session_backend"] = control_state.get("active_session_backend", "")
+                merged["observer_summary"] = summarize_control_state(Path(output_dir), control_state)
+                merged["supervisor_events"] = recent_supervisor_events(Path(output_dir), limit=6)
+            return merged
+        except Exception:
+            logger.debug("Failed to read pipeline status from run artifacts", exc_info=True)
     return _active_run
 
 
@@ -398,6 +482,9 @@ async def get_run(run_id: str) -> dict[str, Any]:
                 info["checkpoint"] = json.load(handle)
         except Exception:
             pass
+    control = read_control_state(run_dir)
+    if control:
+        info["control_state"] = control
 
     stage_dirs = sorted([d.name for d in run_dir.iterdir() if d.is_dir() and d.name.startswith("stage-")])
     info["stages_completed"] = stage_dirs
@@ -424,3 +511,11 @@ async def get_run_metrics(run_id: str) -> dict[str, Any]:
             pass
 
     return {"run_id": run_id, "metrics": metrics}
+
+
+@router.get("/runs/{run_id}/control-state")
+async def get_run_control_state(run_id: str) -> dict[str, Any]:
+    run_dir = _validated_run_dir(run_id)
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+    return {"run_id": run_id, "control_state": read_control_state(run_dir)}

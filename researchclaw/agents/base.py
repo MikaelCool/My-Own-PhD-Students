@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from researchclaw.experiment.validator import detect_non_code_response
+
 logger = logging.getLogger(__name__)
 
 
@@ -97,6 +99,9 @@ class BaseAgent:
             json_mode=json_mode,
         )
         self._tokens += getattr(resp, "total_tokens", 0)
+        non_code_reason = detect_non_code_response(resp.content)
+        if non_code_reason:
+            raise RuntimeError(non_code_reason)
         return resp.content
 
     def _chat_json(

@@ -5,11 +5,26 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_timestamp(value: object) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except ValueError:
+            return None
+    return None
 
 
 @dataclass
@@ -107,11 +122,17 @@ class DashboardCollector:
                 with hb_path.open() as f:
                     hb = json.load(f)
                 last_ts = hb.get("timestamp", 0)
-                snap.is_active = (time.time() - last_ts) < 60
+                parsed_ts = _parse_timestamp(last_ts)
+                snap.is_active = bool(parsed_ts is not None and (time.time() - parsed_ts) < 60)
                 if snap.is_active:
                     snap.status = "running"
             except Exception:
                 pass
+
+        stop_path = run_dir / "STOP_REQUESTED.json"
+        if stop_path.exists():
+            snap.status = "stopped"
+            snap.is_active = False
 
         # --- stage directories ---
         snap.stages_completed = sorted(

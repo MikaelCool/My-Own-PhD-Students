@@ -121,7 +121,10 @@ class WebhookMessageAdapter:
     channel: str
     target: str
     secret: str = ""
-    timeout_sec: int = 10
+    timeout_sec: int = 20
+    retry_count: int = 3
+    retry_backoff_sec: float = 1.5
+    last_delivery: dict[str, object] = field(default_factory=dict, init=False, repr=False)
 
     def notify(self, channel: str, subject: str, body: str) -> str:
         normalized = self._normalize_channel(channel or self.channel)
@@ -133,24 +136,62 @@ class WebhookMessageAdapter:
             headers={"Content-Type": "application/json; charset=utf-8"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_sec) as response:
-                status = getattr(response, "status", 200)
-                response_text = response.read().decode("utf-8", errors="replace")
-                if status >= 400:
-                    raise RuntimeError(
-                        f"webhook notify failed with status {status} for {normalized}"
-                    )
-                self._validate_response(normalized, response_text)
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"webhook notify failed with status {exc.code} for {normalized}: {detail}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(
-                f"webhook notify failed for {normalized}: {exc.reason}"
-            ) from exc
+        last_exc: Exception | None = None
+        started_at = time.time()
+        for attempt in range(1, max(self.retry_count, 1) + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout_sec) as response:
+                    status = getattr(response, "status", 200)
+                    response_text = response.read().decode("utf-8", errors="replace")
+                    if status >= 400:
+                        raise RuntimeError(
+                            f"webhook notify failed with status {status} for {normalized}"
+                        )
+                    self._validate_response(normalized, response_text)
+                    self.last_delivery = {
+                        "channel": normalized,
+                        "subject": subject,
+                        "status": "sent",
+                        "attempts": attempt,
+                        "retried": attempt > 1,
+                        "duration_sec": round(max(time.time() - started_at, 0.0), 3),
+                        "target": self.target,
+                        "error": "",
+                    }
+                    return f"webhook-{normalized}"
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                last_exc = RuntimeError(
+                    f"webhook notify failed with status {exc.code} for {normalized}: {detail}"
+                )
+            except urllib.error.URLError as exc:
+                last_exc = RuntimeError(
+                    f"webhook notify failed for {normalized}: {exc.reason}"
+                )
+            except TimeoutError as exc:
+                last_exc = RuntimeError(
+                    f"webhook notify timed out for {normalized}: {exc}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_exc = RuntimeError(
+                    f"webhook notify failed for {normalized}: {exc}"
+                )
+
+            if attempt < max(self.retry_count, 1):
+                time.sleep(self.retry_backoff_sec * attempt)
+
+        if last_exc is not None:
+            self.last_delivery = {
+                "channel": normalized,
+                "subject": subject,
+                "status": "failed",
+                "attempts": max(self.retry_count, 1),
+                "retried": max(self.retry_count, 1) > 1,
+                "duration_sec": round(max(time.time() - started_at, 0.0), 3),
+                "target": self.target,
+                "error": str(last_exc),
+            }
+            raise last_exc
         return f"webhook-{normalized}"
 
     @staticmethod

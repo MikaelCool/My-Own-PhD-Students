@@ -121,6 +121,82 @@ class SkillRegistry:
             fallback_matching=self._fallback_matching,
         )
 
+    def resolve_bundle(
+        self,
+        context: str,
+        stage: int | str,
+        top_k: int | None = None,
+    ) -> dict[str, list[Skill] | list[dict[str, str]]]:
+        """Return a conflict-aware skill bundle plus rejected candidates."""
+        matched = self.match(context, stage, top_k=(top_k or self._max_skills) * 2)
+        accepted: list[Skill] = []
+        rejected: list[dict[str, str]] = []
+        target_k = top_k or self._max_skills
+        accepted_names: set[str] = set()
+
+        for skill in matched:
+            conflict = next(
+                (
+                    other
+                    for other in accepted
+                    if other.name in skill.conflict_skills or skill.name in other.conflict_skills
+                ),
+                None,
+            )
+            if conflict is not None:
+                rejected.append(
+                    {
+                        "skill": skill.name,
+                        "reason": f"conflicts with {conflict.name}",
+                    }
+                )
+                continue
+            accepted.append(skill)
+            accepted_names.add(skill.name)
+            if len(accepted) >= target_k:
+                break
+
+        for skill in matched:
+            if skill.name not in accepted_names and not any(item["skill"] == skill.name for item in rejected):
+                rejected.append({"skill": skill.name, "reason": "below priority cutoff"})
+
+        return {
+            "selected": accepted,
+            "rejected": rejected,
+        }
+
+    @staticmethod
+    def describe_bundle(
+        skills: list[Skill],
+        *,
+        rejected: list[dict[str, str]] | None = None,
+        max_chars: int = 1600,
+    ) -> str:
+        """Explain why the selected skill bundle is active."""
+        if not skills:
+            return ""
+        lines = ["## Skill Policy"]
+        for skill in skills:
+            reasons: list[str] = []
+            if skill.control_category:
+                reasons.append(f"control={skill.control_category}")
+            if skill.expected_gain:
+                reasons.append(f"gain={skill.expected_gain}")
+            if skill.token_cost_band:
+                reasons.append(f"token={skill.token_cost_band}")
+            if skill.preconditions:
+                reasons.append("preconditions=" + "; ".join(skill.preconditions[:2]))
+            if skill.escalation_rule:
+                reasons.append(f"escalation={skill.escalation_rule}")
+            suffix = f" ({'; '.join(reasons)})" if reasons else ""
+            lines.append(f"- {skill.name}{suffix}")
+        if rejected:
+            lines.append("- Rejected skills:")
+            for item in rejected[:4]:
+                lines.append(f"  - {item['skill']}: {item['reason']}")
+        text = "\n".join(lines) + "\n"
+        return text[:max_chars]
+
     def export_for_prompt(
         self,
         skills: list[Skill],

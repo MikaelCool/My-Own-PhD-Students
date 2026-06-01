@@ -429,14 +429,13 @@ class TestRunRepairLoop:
         """Test full repair loop with mocked LLM and sandbox."""
         run_dir = self._make_run_dir(tmp_path, n_conditions=1)
 
-        from researchclaw.config import ExperimentRepairConfig, ExperimentConfig, OpenCodeConfig
+        from researchclaw.config import ExperimentRepairConfig
 
         class FakeConfig:
             class experiment:
                 time_budget_sec = 2400
                 mode = "simulated"
-                repair = ExperimentRepairConfig(enabled=True, max_cycles=1, use_opencode=False)
-                opencode = OpenCodeConfig(enabled=False)
+                repair = ExperimentRepairConfig(enabled=True, max_cycles=1)
                 metric_key = "primary_metric"
 
             class llm:

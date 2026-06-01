@@ -31,6 +31,7 @@ def test_metaclaw_bridge_defaults():
     assert cfg.metaclaw_bridge.proxy_url == "http://localhost:30000"
     assert cfg.metaclaw_bridge.prm.enabled is False
     assert cfg.metaclaw_bridge.lesson_to_skill.enabled is True
+    assert cfg.metaclaw_bridge.skill_evolution.enabled is True
 
 
 def test_metaclaw_bridge_enabled():
@@ -53,6 +54,14 @@ def test_metaclaw_bridge_enabled():
                 "min_severity": "warning",
                 "max_skills_per_run": 5,
             },
+            "skill_evolution": {
+                "enabled": True,
+                "max_candidates_per_run": 4,
+                "max_trial_skills": 2,
+                "min_trial_records": 3,
+                "promote_success_rate": 0.7,
+                "reject_success_rate": 0.25,
+            },
         }
     )
     cfg = RCConfig.from_dict(data, check_paths=False)
@@ -63,6 +72,11 @@ def test_metaclaw_bridge_enabled():
     assert cfg.metaclaw_bridge.prm.gate_stages == (5, 20)
     assert cfg.metaclaw_bridge.lesson_to_skill.min_severity == "warning"
     assert cfg.metaclaw_bridge.lesson_to_skill.max_skills_per_run == 5
+    assert cfg.metaclaw_bridge.skill_evolution.max_candidates_per_run == 4
+    assert cfg.metaclaw_bridge.skill_evolution.max_trial_skills == 2
+    assert cfg.metaclaw_bridge.skill_evolution.min_trial_records == 3
+    assert cfg.metaclaw_bridge.skill_evolution.promote_success_rate == 0.7
+    assert cfg.metaclaw_bridge.skill_evolution.reject_success_rate == 0.25
 
 
 def test_metaclaw_bridge_none_is_default():

@@ -30,7 +30,7 @@ def _get_project_manager() -> ProjectManager:
 
 def _serialize_project(project: Project, manager: ProjectManager) -> dict[str, Any]:
     latest_run = manager.latest_run(project.name)
-    payload = project.to_dict()
+    payload = manager._effective_project(project, latest_run).to_dict()
     payload["latest_run"] = latest_run
     return payload
 

@@ -23,15 +23,39 @@ returns ``CodeAgentResult`` with the generated files.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import logging
+import os
 import re
+import tempfile
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from researchclaw.experiment.validator import detect_non_code_response
+from researchclaw.pipeline.control_state import write_code_agent_control_state
+from researchclaw.pipeline.stages import Stage
+
 logger = logging.getLogger(__name__)
+
+_REVIEW_FULL_FILE_ORDER: tuple[str, ...] = ("main.py", "methods.py", "data.py", "evaluate.py", "config.py")
+_REVIEW_FULL_FILE_CHAR_BUDGET = 12000
+_SUMMARY_CHAR_BUDGET = 8000
+_ISSUE_FOCUSED_FILE_CHAR_BUDGET = 14000
+_ISSUE_FOCUSED_BLOCK_LIMIT = 4
+
+def _summarize_stderr(stderr: str, *, max_chars: int = 600) -> str:
+    text = (stderr or "").strip()
+    if not text:
+        return ""
+    compact = re.sub(r"\s+", " ", text)
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 3] + "..."
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -64,7 +88,7 @@ class CodeAgentConfig:
 
     # Phase 3: Execution-in-the-loop
     exec_fix_max_iterations: int = 3
-    exec_fix_timeout_sec: int = 60
+    exec_fix_timeout_sec: int = 180
 
     # Phase 4: Solution tree search (off by default)
     tree_search_enabled: bool = False
@@ -173,6 +197,8 @@ class CodeAgent:
         experiment_config: Any | None = None,
         domain_profile: Any | None = None,
         code_search_result: Any | None = None,
+        sandbox_notify_callback: Any | None = None,
+        sandbox_stop_requested: Any | None = None,
     ) -> None:
         self._llm = llm
         self._pm = prompts
@@ -182,10 +208,14 @@ class CodeAgent:
         self._exp_config = experiment_config
         self._domain_profile = domain_profile
         self._code_search_result = code_search_result
+        self._sandbox_notify_callback = sandbox_notify_callback
+        self._sandbox_stop_requested = sandbox_stop_requested
         self._calls = 0
         self._runs = 0
         self._log: list[str] = []
         self._sandbox: _SandboxLike | None = None
+        self._state_path = self._stage_dir / "code_agent_state.json"
+        self._recovery_dir = self._stage_dir / "code_agent_recovery"
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -200,17 +230,63 @@ class CodeAgent:
         """Execute all enabled phases and return generated files."""
         t0 = time.time()
         self._log_event("CodeAgent.generate() started")
+        state = self._load_state()
+        self._calls = max(self._calls, int(state.get("llm_calls", 0) or 0))
+        self._runs = max(self._runs, int(state.get("sandbox_runs", 0) or 0))
+        if state:
+            self._log_event(
+                "Resuming from state: "
+                f"phase={state.get('phase')}, "
+                f"substate={state.get('phase_substate')}, "
+                f"next_action={state.get('next_action')}, "
+                f"file_index={state.get('file_index')}, "
+                f"current_file={state.get('current_file') or '-'}, "
+                f"review_rounds={state.get('review_rounds_completed', 0)}, "
+                f"files={len(self._files_from_state(state))}"
+            )
 
         # Phase 1: Blueprint planning
-        arch_spec = ""
-        blueprint = None
-        if self._cfg.architecture_planning:
+        arch_spec = str(state.get("arch_spec", "") or "")
+        blueprint = state.get("blueprint")
+        if (
+            self._cfg.architecture_planning
+            and not arch_spec
+        ):
+            self._save_state(
+                {
+                    "phase": "blueprint",
+                    "phase_substate": "generate",
+                    "next_action": "run_blueprint_planning",
+                    "blueprint_index": 0,
+                    "file_index": -1,
+                    "current_file": "",
+                    "arch_spec": "",
+                    "blueprint": None,
+                    "files": {},
+                    "review_rounds_completed": 0,
+                }
+            )
             arch_spec, blueprint = self._phase1_blueprint(
                 topic, exp_plan, metric,
+            )
+            self._save_state(
+                {
+                    "phase": "blueprint_done",
+                    "phase_substate": "done",
+                    "next_action": "start_sequential_generation",
+                    "blueprint_index": 1,
+                    "file_index": -1,
+                    "current_file": "",
+                    "arch_spec": arch_spec,
+                    "blueprint": blueprint,
+                    "files": {},
+                    "review_rounds_completed": 0,
+                }
             )
 
         # Phase 2: Code generation
         nodes_explored = 0
+        files = self._files_from_state(state)
         if self._cfg.tree_search_enabled and self._sandbox_factory:
             best, nodes_explored = self._phase3_tree_search(
                 topic, exp_plan, metric, pkg_hint, arch_spec, max_tokens,
@@ -222,7 +298,7 @@ class CodeAgent:
         ):
             # Sequential file generation following blueprint
             files = self._phase2_sequential_generate(
-                topic, exp_plan, metric, pkg_hint, arch_spec, blueprint,
+                topic, exp_plan, metric, pkg_hint, arch_spec, blueprint, files,
             )
             # Hard validation gates (E-03)
             if self._cfg.hard_validation:
@@ -241,9 +317,10 @@ class CodeAgent:
                     "  Sequential generation requested but blueprint "
                     "invalid — falling back to single-shot"
                 )
-            files = self._phase2_generate_and_fix(
-                topic, exp_plan, metric, pkg_hint, arch_spec, max_tokens,
-            )
+            if not files:
+                files = self._phase2_generate_and_fix(
+                    topic, exp_plan, metric, pkg_hint, arch_spec, max_tokens,
+                )
             # Hard validation gates (E-03) for single-shot too
             if self._cfg.hard_validation and files:
                 files = self._hard_validate_and_repair(
@@ -265,6 +342,15 @@ class CodeAgent:
         self._log_event(
             f"CodeAgent.generate() done in {elapsed:.1f}s — "
             f"{self._calls} LLM calls, {self._runs} sandbox runs"
+        )
+        self._save_state(
+            {
+                "phase": "done",
+                "arch_spec": arch_spec,
+                "blueprint": blueprint,
+                "files": best.files,
+                "review_rounds_completed": review_rounds,
+            }
         )
 
         return CodeAgentResult(
@@ -477,12 +563,15 @@ class CodeAgent:
         pkg_hint: str,
         arch_spec: str,
         blueprint: dict[str, Any],
+        existing_files: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """Generate files one-by-one following blueprint dependency order."""
         self._log_event("Phase 2: Sequential generation (blueprint-guided)")
 
-        generated_files: dict[str, str] = {}
+        generated_files: dict[str, str] = dict(existing_files or {})
         code_memory: dict[str, dict[str, Any]] = {}  # CodeMem summaries
+        for fname, code in generated_files.items():
+            code_memory[fname] = self._build_code_summary(fname, code)
 
         # Sort files by generation_order
         file_specs = blueprint.get("files", [])
@@ -494,15 +583,53 @@ class CodeAgent:
                 fs["generation_order"] = i + 1
 
         file_specs.sort(key=lambda f: f.get("generation_order", 99))
+        state = self._load_state()
+        resume_file = str(state.get("current_file", "") or "")
+        resume_action = str(state.get("next_action", "") or "")
+        start_pos = 0
+        if state.get("phase") == "sequential_generation" and resume_file:
+            for pos, file_spec in enumerate(file_specs):
+                if file_spec.get("name") != resume_file:
+                    continue
+                if resume_action == "generate_next_file" and resume_file in generated_files:
+                    start_pos = pos + 1
+                else:
+                    start_pos = pos
+                self._log_event(
+                    f"  Sequential resume target: {resume_file} "
+                    f"(position {start_pos + 1}/{len(file_specs)})"
+                )
+                break
 
-        for file_spec in file_specs:
+        for pos, file_spec in enumerate(file_specs[start_pos:], start=start_pos):
             file_name = file_spec.get("name", "")
             if not file_name:
                 continue
+            if file_name in generated_files:
+                self._log_event(f"  Reusing generated file {file_name}")
+                continue
+            try:
+                file_index = int(file_spec.get("generation_order", 0))
+            except (TypeError, ValueError):
+                file_index = 0
 
             self._log_event(
                 f"  Generating {file_name} "
                 f"(order={file_spec.get('generation_order')})"
+            )
+            self._save_state(
+                {
+                    "phase": "sequential_generation",
+                    "phase_substate": "generate",
+                    "next_action": "generate_file",
+                    "blueprint_index": 1,
+                    "file_index": pos,
+                    "arch_spec": arch_spec,
+                    "blueprint": blueprint,
+                    "files": generated_files,
+                    "current_file": file_name,
+                    "review_rounds_completed": 0,
+                }
             )
 
             # Build dependency context
@@ -545,6 +672,14 @@ class CodeAgent:
             )
             resp = self._chat(sp.system, sp.user, max_tokens=8192)
 
+            upstream_error = detect_non_code_response(resp.content)
+            if upstream_error:
+                self._log_event(
+                    f"  WARNING: {file_name} generation returned non-code text: "
+                    f"{upstream_error}"
+                )
+                continue
+
             # Extract code from response
             code = self._extract_single_file_code(resp.content, file_name)
             if not code:
@@ -556,6 +691,20 @@ class CodeAgent:
             # Build CodeMem summary via AST
             code_memory[file_name] = self._build_code_summary(
                 file_name, code,
+            )
+            self._save_state(
+                {
+                    "phase": "sequential_generation",
+                    "phase_substate": "generate",
+                    "next_action": "generate_next_file",
+                    "blueprint_index": 1,
+                    "file_index": pos,
+                    "arch_spec": arch_spec,
+                    "blueprint": blueprint,
+                    "files": generated_files,
+                    "current_file": file_name,
+                    "review_rounds_completed": 0,
+                }
             )
 
             self._log_event(
@@ -578,10 +727,16 @@ class CodeAgent:
     @staticmethod
     def _extract_single_file_code(content: str, expected_name: str) -> str:
         """Extract Python code from LLM response for a single file."""
+        if detect_non_code_response(content):
+            return ""
+
         # Try to extract from ```python``` block
         m = re.search(r"```python\s*\n(.*?)```", content, re.DOTALL)
         if m:
-            return m.group(1).strip()
+            candidate = m.group(1).strip()
+            if detect_non_code_response(candidate):
+                return ""
+            return candidate
 
         # Try ```filename:xxx.py block
         m = re.search(
@@ -589,7 +744,10 @@ class CodeAgent:
             content, re.DOTALL,
         )
         if m:
-            return m.group(1).strip()
+            candidate = m.group(1).strip()
+            if detect_non_code_response(candidate):
+                return ""
+            return candidate
 
         # If content looks like raw Python (starts with import/from/# or def)
         stripped = content.strip()
@@ -669,9 +827,77 @@ class CodeAgent:
         issues are logged as warnings only.
         """
         self._log_event("Phase 2.5: Hard validation gates")
+        self._save_state(
+            {
+                "phase": "hard_validation",
+                "phase_substate": "validate",
+                "next_action": "run_hard_validation",
+                "blueprint_index": 1,
+                "file_index": -1,
+                "current_file": "",
+                "files": files,
+            }
+        )
 
-        for attempt in range(self._cfg.hard_validation_max_repairs + 1):
+        state = self._load_state()
+        start_attempt = 0
+        if state.get("phase") == "hard_validation":
+            saved_attempt = int(state.get("repair_attempt", 0) or 0)
+            if state.get("next_action") == "repair_critical_issues":
+                start_attempt = min(
+                    saved_attempt + 1,
+                    self._cfg.hard_validation_max_repairs,
+                )
+            else:
+                start_attempt = saved_attempt
+            self._log_event(
+                f"  Hard validation resume attempt={start_attempt}"
+            )
+
+        for attempt in range(
+            start_attempt,
+            self._cfg.hard_validation_max_repairs + 1,
+        ):
+            files, local_fixes = self._apply_local_hard_validation_repairs(files)
+            if local_fixes:
+                self._save_state(
+                    {
+                        "phase": "hard_validation",
+                        "phase_substate": "local_repair",
+                        "next_action": "apply_local_repairs",
+                        "repair_attempt": attempt,
+                        "blueprint_index": 1,
+                        "file_index": -1,
+                        "current_file": "",
+                        "files": files,
+                    }
+                )
+                for change in local_fixes:
+                    self._log_event(f"  LOCAL-REPAIR: {change}")
+
             critical, warnings = self._hard_validate(files)
+
+            if critical:
+                files, issue_local_fixes = self._apply_issue_specific_local_repairs(
+                    files,
+                    critical,
+                )
+                if issue_local_fixes:
+                    self._save_state(
+                        {
+                            "phase": "hard_validation",
+                            "phase_substate": "local_repair",
+                            "next_action": "apply_issue_specific_local_repairs",
+                            "repair_attempt": attempt,
+                            "blueprint_index": 1,
+                            "file_index": -1,
+                            "current_file": "",
+                            "files": files,
+                        }
+                    )
+                    for change in issue_local_fixes:
+                        self._log_event(f"  LOCAL-REPAIR: {change}")
+                    critical, warnings = self._hard_validate(files)
 
             # Log warnings
             for w in warnings:
@@ -700,6 +926,18 @@ class CodeAgent:
             # Targeted repair: ask LLM to fix specific critical issues
             files = self._repair_critical_issues(
                 files, critical, topic, exp_plan, metric, arch_spec,
+            )
+            self._save_state(
+                {
+                    "phase": "hard_validation",
+                    "phase_substate": "repair",
+                    "next_action": "repair_critical_issues",
+                    "repair_attempt": attempt,
+                    "blueprint_index": 1,
+                    "file_index": -1,
+                    "current_file": "",
+                    "files": files,
+                }
             )
 
         return files
@@ -808,20 +1046,9 @@ class CodeAgent:
                         target_file = f"{mod_top}.py"
                         if target_file in files and node.names:
                             target_code = files[target_file]
-                            try:
-                                target_tree = ast.parse(target_code)
-                            except SyntaxError:
+                            exported = self._list_top_level_names(target_code)
+                            if not exported:
                                 continue
-                            exported = set()
-                            for tnode in ast.walk(target_tree):
-                                if isinstance(tnode, ast.ClassDef):
-                                    exported.add(tnode.name)
-                                elif isinstance(tnode, ast.FunctionDef):
-                                    exported.add(tnode.name)
-                                elif isinstance(tnode, ast.Assign):
-                                    for t in tnode.targets:
-                                        if isinstance(t, ast.Name):
-                                            exported.add(t.id)
                             for alias in node.names:
                                 name = alias.name
                                 if name != "*" and name not in exported:
@@ -896,39 +1123,40 @@ class CodeAgent:
 
         if not affected_files:
             affected_files.update(f for f in files if f.endswith(".py"))
-
-        files_ctx = self._format_files(files)
-        issues_text = "\n".join(f"- {issue}" for issue in critical_issues)
-
-        prompt = (
-            "Your generated code has CRITICAL issues that will cause "
-            "runtime failures or produce invalid results. Fix ALL of them.\n\n"
-            "## Critical Issues Found\n"
-            f"{issues_text}\n\n"
-            "## Architecture Blueprint\n"
-            f"{arch_spec[:4000]}\n\n"
-            "## Current Code\n"
-            f"{files_ctx}\n\n"
-            "## Rules\n"
-            "1. Fix every critical issue listed above\n"
-            "2. Ablation/variant classes MUST have different implementations "
-            "from their parent — change the forward() or core method\n"
-            "3. Never hardcode metric values — compute them from actual data\n"
-            "4. nn.Module layers must be created in __init__(), not forward()\n"
-            "5. All cross-file imports must reference names that actually exist\n"
-            "6. Output ALL files in ```filename:xxx.py``` format\n"
-        )
-
+        issues_by_file = self._group_issues_by_file(critical_issues, affected_files)
+        merged = dict(files)
+        repaired_files: set[str] = set()
         sys_prompt = self._pm.system("code_generation")
-        resp = self._chat(sys_prompt, prompt, max_tokens=16384)
 
-        fixed = self._extract_files(resp.content)
-        if fixed:
-            merged = dict(files)
-            merged.update(fixed)
+        for fname in sorted(affected_files):
+            file_issues = issues_by_file.get(fname, [])
+            if not file_issues:
+                continue
+            repaired_code = None
+            code = merged.get(fname, "")
+            if self._should_use_problem_block_repair(fname, code, file_issues):
+                repaired_code = self._repair_file_by_problem_blocks(
+                    merged,
+                    fname,
+                    file_issues,
+                    arch_spec,
+                )
+            if repaired_code is None:
+                repaired_code = self._repair_file_with_full_context(
+                    merged,
+                    fname,
+                    file_issues,
+                    arch_spec,
+                    sys_prompt,
+                )
+            if repaired_code is not None and repaired_code != merged.get(fname):
+                merged[fname] = repaired_code
+                repaired_files.add(fname)
+
+        if repaired_files:
             self._log_event(
-                f"  Repair updated {len(fixed)} file(s): "
-                f"{', '.join(sorted(fixed))}"
+                f"  Repair updated {len(repaired_files)} file(s): "
+                f"{', '.join(sorted(repaired_files))}"
             )
             return merged
 
@@ -964,7 +1192,29 @@ class CodeAgent:
         if not self._sandbox_factory or self._cfg.exec_fix_max_iterations <= 0:
             return files
 
-        for i in range(self._cfg.exec_fix_max_iterations):
+        state = self._load_state()
+        start_iter = 0
+        if state.get("phase") == "exec_fix":
+            saved_iter = int(state.get("exec_fix_iteration", 0) or 0)
+            if state.get("next_action") == "runtime_repair":
+                start_iter = min(saved_iter + 1, self._cfg.exec_fix_max_iterations)
+            else:
+                start_iter = saved_iter
+            self._log_event(f"  Exec-fix resume iteration={start_iter}")
+
+        for i in range(start_iter, self._cfg.exec_fix_max_iterations):
+            self._save_state(
+                {
+                    "phase": "exec_fix",
+                    "phase_substate": "run",
+                    "next_action": "sandbox_run",
+                    "blueprint_index": 1,
+                    "file_index": -1,
+                    "current_file": "",
+                    "files": files,
+                    "exec_fix_iteration": i,
+                }
+            )
             result = self._run_in_sandbox(files)
             if result.returncode == 0:
                 self._log_event(f"  Exec-fix iter {i}: code runs OK")
@@ -972,9 +1222,22 @@ class CodeAgent:
 
             self._log_event(
                 f"  Exec-fix iter {i}: crashed (rc={result.returncode}), "
-                f"stderr={len(result.stderr or '')} chars"
+                f"stderr={len(result.stderr or '')} chars, "
+                f"summary={_summarize_stderr(result.stderr)}"
             )
             files = self._fix_runtime_error(files, result)
+            self._save_state(
+                {
+                    "phase": "exec_fix",
+                    "phase_substate": "repair",
+                    "next_action": "runtime_repair",
+                    "blueprint_index": 1,
+                    "file_index": -1,
+                    "current_file": "",
+                    "files": files,
+                    "exec_fix_iteration": i,
+                }
+            )
 
         return files
 
@@ -1054,7 +1317,17 @@ class CodeAgent:
                 return fixed
 
         # Fallback: full-file repair
-        files_ctx = self._format_files(files)
+        focus_target = (
+            error_loc[0]
+            if error_loc
+            else ("main.py" if "main.py" in files else next(iter(files), "main.py"))
+        )
+        files_ctx = self._build_compact_project_context(
+            files,
+            focus_files={focus_target},
+            full_file_order=[focus_target],
+            full_budget=max(len(files.get(focus_target, "")) + 2000, 12000),
+        )
         sp = self._pm.sub_prompt(
             "code_exec_fix",
             stderr=stderr_tail or "(empty)",
@@ -1178,7 +1451,9 @@ class CodeAgent:
                 resp.content, re.DOTALL,
             )
             if code_match:
-                fixed = {target_file: code_match.group(1).strip()}
+                candidate = code_match.group(1).strip()
+                if not detect_non_code_response(candidate):
+                    fixed = {target_file: candidate}
 
         if fixed and target_file in fixed:
             merged = dict(files)
@@ -1323,10 +1598,26 @@ class CodeAgent:
         """Reviewer agent examines code; coder fixes critical issues."""
         self._log_event("Phase 4: Review dialog")
 
-        rounds = 0
-        for r in range(self._cfg.review_max_rounds):
-            rounds += 1
-            files_ctx = self._format_files(files)
+        state = self._load_state()
+        rounds = int(state.get("review_rounds_completed", 0) or 0)
+        start_round = rounds
+        if state.get("phase") == "review":
+            self._log_event(f"  Review resume round={start_round + 1}")
+        for r in range(start_round, self._cfg.review_max_rounds):
+            rounds = r + 1
+            self._save_state(
+                {
+                    "phase": "review",
+                    "phase_substate": "review",
+                    "next_action": "review_round",
+                    "blueprint_index": 1,
+                    "file_index": -1,
+                    "current_file": "",
+                    "files": files,
+                    "review_rounds_completed": r,
+                }
+            )
+            files_ctx = self._build_review_context(files)
 
             sp = self._pm.sub_prompt(
                 "code_reviewer",
@@ -1335,7 +1626,13 @@ class CodeAgent:
                 metric=metric,
                 files_context=files_ctx,
             )
-            resp = self._chat(sp.system, sp.user, max_tokens=4096)
+            try:
+                resp = self._chat(sp.system, sp.user, max_tokens=2048)
+            except Exception as exc:
+                self._log_event(
+                    f"  Review round {r + 1}: reviewer call failed, skipping ({exc})"
+                )
+                break
 
             review = self._parse_json(resp.content)
             if not isinstance(review, dict) or not review:
@@ -1356,23 +1653,75 @@ class CodeAgent:
             if verdict == "APPROVE" or not critical:
                 break
 
-            # Fix critical issues using the code_generation system prompt
-            fix_prompt = (
-                "A code reviewer found these critical issues in your experiment code.\n"
-                "Fix ALL of them while preserving the experiment design.\n\n"
-                "## Critical Issues\n"
-                + "\n".join(f"- {issue}" for issue in critical)
-                + f"\n\n## Current Code\n{files_ctx}\n\n"
-                "Output ALL files in ```filename:xxx.py``` format, "
-                "including unchanged files."
-            )
+            affected_files = {
+                fname for fname in (
+                    self._extract_issue_filename(issue) for issue in critical
+                ) if fname
+            }
             sys_prompt = self._pm.system("code_generation")
-            fix_resp = self._chat(sys_prompt, fix_prompt, max_tokens=16384)
+            issues_by_file = self._group_issues_by_file(
+                critical,
+                affected_files or {"main.py", "methods.py"},
+            )
+            fixed: dict[str, str] = {}
+            for fname in sorted(issues_by_file):
+                file_issues = issues_by_file.get(fname, [])
+                if not file_issues or fname not in files:
+                    continue
+                repair_ctx = self._build_issue_focused_project_context(
+                    files,
+                    target_file=fname,
+                    issues=file_issues,
+                    full_budget=14000,
+                )
+                summarized_issues = "\n".join(
+                    f"- {issue}" for issue in file_issues[:6]
+                )
+                fix_prompt = (
+                    "A code reviewer found critical issues in one target file.\n"
+                    "Fix only that file while preserving the experiment design.\n\n"
+                    f"## Target File\n{fname}\n\n"
+                    "## Critical Issues\n"
+                    + summarized_issues
+                    + f"\n\n## Project Context\n{repair_ctx}\n\n"
+                    "Output ONLY the corrected target file in "
+                    f"```filename:{fname}``` format."
+                )
+                try:
+                    fix_resp = self._chat(sys_prompt, fix_prompt, max_tokens=8192)
+                except Exception as exc:
+                    self._log_event(
+                        f"  Review round {r + 1}: repair call failed for {fname}, "
+                        f"skipping ({exc})"
+                    )
+                    continue
+                file_fixed = self._extract_files(fix_resp.content)
+                if not file_fixed:
+                    single = self._extract_single_file_code(fix_resp.content, fname)
+                    if single:
+                        file_fixed = {fname: single}
+                if fname in file_fixed:
+                    fixed[fname] = file_fixed[fname]
 
-            fixed = self._extract_files(fix_resp.content)
             if fixed:
                 files = dict(files)
                 files.update(fixed)
+                self._save_state(
+                    {
+                        "phase": "review",
+                        "phase_substate": "repair",
+                        "next_action": "apply_review_fixes",
+                        "blueprint_index": 1,
+                        "file_index": -1,
+                        "current_file": "",
+                        "files": files,
+                        "review_rounds_completed": rounds,
+                    }
+                )
+            else:
+                self._log_event(
+                    f"  Review round {r + 1}: no repair files extracted, skipping"
+                )
 
         return files, rounds
 
@@ -1393,9 +1742,16 @@ class CodeAgent:
         if self._sandbox is None:
             sandbox_dir = self._stage_dir / "agent_sandbox"
             sandbox_dir.mkdir(parents=True, exist_ok=True)
-            self._sandbox = self._sandbox_factory(
-                self._exp_config, sandbox_dir,
-            )
+            try:
+                self._sandbox = self._sandbox_factory(
+                    self._exp_config, sandbox_dir,
+                    notify_callback=self._sandbox_notify_callback,
+                    stop_requested=self._sandbox_stop_requested,
+                )
+            except TypeError as exc:
+                if "unexpected keyword argument" not in str(exc):
+                    raise
+                self._sandbox = self._sandbox_factory(self._exp_config, sandbox_dir)
         return self._sandbox
 
     def _run_in_sandbox(
@@ -1441,7 +1797,638 @@ class CodeAgent:
         # Local import to avoid circular dependency with executor.py
         from researchclaw.pipeline.executor import _extract_multi_file_blocks
 
-        return _extract_multi_file_blocks(content)
+        extracted = _extract_multi_file_blocks(content)
+        filtered: dict[str, str] = {}
+        for fname, code in extracted.items():
+            upstream_error = detect_non_code_response(code)
+            if upstream_error:
+                self._log_event(
+                    f"  WARNING: Ignoring non-code response for {fname}: "
+                    f"{upstream_error}"
+                )
+                continue
+            filtered[fname] = code
+        return filtered
+
+    @staticmethod
+    def _extract_issue_filename(issue: str) -> str | None:
+        match = re.search(r"\[([^\]]+\.py)\]", issue)
+        if match:
+            return match.group(1)
+        match = re.search(r"\b([A-Za-z0-9_]+\.py)\b", issue)
+        if match:
+            return match.group(1)
+        return None
+
+    def _group_issues_by_file(
+        self,
+        issues: list[str],
+        affected_files: set[str],
+    ) -> dict[str, list[str]]:
+        grouped = {fname: [] for fname in affected_files}
+        unscoped: list[str] = []
+        for issue in issues:
+            fname = self._extract_issue_filename(issue)
+            if fname and fname in grouped:
+                grouped[fname].append(issue)
+            else:
+                unscoped.append(issue)
+        if unscoped:
+            for fname in grouped:
+                grouped[fname].extend(unscoped)
+        return grouped
+
+    def _apply_local_hard_validation_repairs(
+        self,
+        files: dict[str, str],
+    ) -> tuple[dict[str, str], list[str]]:
+        from researchclaw.experiment.validator import auto_fix_unbound_locals
+
+        merged = dict(files)
+        changes: list[str] = []
+        for fname, code in files.items():
+            if not fname.endswith(".py"):
+                continue
+            fixed_code, n_fixes = auto_fix_unbound_locals(code)
+            if n_fixes > 0 and fixed_code != code:
+                merged[fname] = fixed_code
+                changes.append(
+                    f"{fname}: initialized {n_fixes} branch-scoped variable(s) "
+                    "to avoid UnboundLocalError"
+                )
+        return merged, changes
+
+    def _apply_issue_specific_local_repairs(
+        self,
+        files: dict[str, str],
+        critical_issues: list[str],
+    ) -> tuple[dict[str, str], list[str]]:
+        merged = dict(files)
+        changes: list[str] = []
+        seen: set[tuple[str, str]] = set()
+
+        for issue in critical_issues:
+            match = re.search(
+                r"ImportError: '([^']+)' not defined in '([^']+\.py)'",
+                issue,
+            )
+            if not match:
+                continue
+            missing_name = match.group(1)
+            target_file = match.group(2)
+            key = (target_file, missing_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            target_code = merged.get(target_file)
+            if not target_code:
+                continue
+            fixed_code, note = self._auto_fix_missing_export(
+                target_file,
+                target_code,
+                missing_name,
+            )
+            if note and fixed_code != target_code:
+                merged[target_file] = fixed_code
+                changes.append(note)
+
+        return merged, changes
+
+    @staticmethod
+    def _list_top_level_names(code: str) -> set[str]:
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return set()
+
+        names: set[str] = set()
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        names.add(target.id)
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                names.add(node.target.id)
+        return names
+
+    def _auto_fix_missing_export(
+        self,
+        target_file: str,
+        code: str,
+        missing_name: str,
+    ) -> tuple[str, str | None]:
+        names = self._list_top_level_names(code)
+        if missing_name in names:
+            return code, None
+
+        if missing_name != "CONDITION_CLASS_REGISTRY":
+            return code, None
+
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return code, None
+
+        condition_classes: list[str] = []
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            if node.name == "BaseConditionStrategy":
+                continue
+            base_names = {
+                ast.unparse(base).split(".")[-1]
+                for base in node.bases
+                if hasattr(ast, "unparse")
+            }
+            if node.name.endswith("Condition") or "BaseConditionStrategy" in base_names:
+                condition_classes.append(node.name)
+
+        if not condition_classes:
+            return code, None
+
+        registry_lines = "\n".join(
+            f'    "{name}": {name},'
+            for name in condition_classes
+        )
+        export_lines = ", ".join(
+            f'"{name}"'
+            for name in ["CONDITION_CLASS_REGISTRY", *condition_classes]
+        )
+        suffix = (
+            "\n\nCONDITION_CLASS_REGISTRY = {\n"
+            f"{registry_lines}\n"
+            "}\n"
+            "__all__ = sorted(set(list(globals().get(\"__all__\", [])) + ["
+            f"{export_lines}"
+            "]))\n"
+        )
+        return (
+            code.rstrip() + suffix,
+            f"{target_file}: synthesized CONDITION_CLASS_REGISTRY export for local imports",
+        )
+
+    @staticmethod
+    def _parse_issue_line_numbers(
+        fname: str,
+        issues: list[str],
+    ) -> list[int]:
+        line_numbers: list[int] = []
+        pattern = re.compile(rf"\[{re.escape(fname)}:(\d+)\]")
+        for issue in issues:
+            line_numbers.extend(int(m.group(1)) for m in pattern.finditer(issue))
+        return sorted(set(line_numbers))
+
+    @staticmethod
+    def _should_use_problem_block_repair(
+        fname: str,
+        code: str,
+        issues: list[str],
+    ) -> bool:
+        line_count = len(code.splitlines())
+        issue_lines = CodeAgent._parse_issue_line_numbers(fname, issues)
+        return line_count >= 600 or len(issue_lines) >= 2 or len(issues) >= 4
+
+    @staticmethod
+    def _collect_symbol_spans(code: str) -> list[dict[str, Any]]:
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return []
+
+        parents: dict[ast.AST, str] = {}
+        spans: list[dict[str, Any]] = []
+
+        class Visitor(ast.NodeVisitor):
+            def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                qualname = node.name
+                parent_name = parents.get(node)
+                if parent_name:
+                    qualname = f"{parent_name}.{node.name}"
+                spans.append(
+                    {
+                        "kind": "class",
+                        "qualname": qualname,
+                        "start_line": node.lineno,
+                        "end_line": getattr(node, "end_lineno", node.lineno),
+                    }
+                )
+                for child in node.body:
+                    parents[child] = qualname
+                self.generic_visit(node)
+
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                parent_name = parents.get(node)
+                qualname = f"{parent_name}.{node.name}" if parent_name else node.name
+                spans.append(
+                    {
+                        "kind": "function",
+                        "qualname": qualname,
+                        "start_line": node.lineno,
+                        "end_line": getattr(node, "end_lineno", node.lineno),
+                    }
+                )
+                for child in node.body:
+                    parents[child] = qualname
+                self.generic_visit(node)
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+        for child in tree.body:
+            parents[child] = ""
+        Visitor().visit(tree)
+        return spans
+
+    def _build_problem_blocks(
+        self,
+        fname: str,
+        code: str,
+        issues: list[str],
+    ) -> list[dict[str, Any]]:
+        lines = code.splitlines()
+        issue_lines = self._parse_issue_line_numbers(fname, issues)
+        spans = self._collect_symbol_spans(code)
+        blocks: list[dict[str, Any]] = []
+
+        for line_no in issue_lines:
+            containing = [
+                span
+                for span in spans
+                if span["start_line"] <= line_no <= span["end_line"]
+            ]
+            if containing:
+                best = min(
+                    containing,
+                    key=lambda span: span["end_line"] - span["start_line"],
+                )
+                block = dict(best)
+            else:
+                start_line = max(1, line_no - 12)
+                end_line = min(len(lines), line_no + 20)
+                block = {
+                    "kind": "window",
+                    "qualname": f"lines_{start_line}_{end_line}",
+                    "start_line": start_line,
+                    "end_line": end_line,
+                }
+            blocks.append(block)
+
+        if not blocks:
+            blocks.append(
+                {
+                    "kind": "file_head",
+                    "qualname": "file_head",
+                    "start_line": 1,
+                    "end_line": min(len(lines), 220),
+                }
+            )
+
+        blocks.sort(key=lambda item: (item["start_line"], item["end_line"]))
+        merged_blocks: list[dict[str, Any]] = []
+        for block in blocks:
+            if not merged_blocks:
+                merged_blocks.append(block)
+                continue
+            last = merged_blocks[-1]
+            if block["start_line"] <= last["end_line"] + 3:
+                last["end_line"] = max(last["end_line"], block["end_line"])
+                last["qualname"] = f"{last['qualname']}|{block['qualname']}"
+                if last["kind"] != block["kind"]:
+                    last["kind"] = "mixed"
+                continue
+            merged_blocks.append(block)
+
+        for block in merged_blocks:
+            start = block["start_line"] - 1
+            end = block["end_line"]
+            block["code"] = "\n".join(lines[start:end])
+        return merged_blocks
+
+    def _repair_file_by_problem_blocks(
+        self,
+        files: dict[str, str],
+        fname: str,
+        issues: list[str],
+        arch_spec: str,
+    ) -> str | None:
+        code = files.get(fname)
+        if not code:
+            return None
+
+        blocks = self._build_problem_blocks(fname, code, issues)
+        block_specs = "\n\n".join(
+            (
+                f"### Block {idx + 1}: {block['qualname']}\n"
+                f"- kind: {block['kind']}\n"
+                f"- replace lines: {block['start_line']}-{block['end_line']}\n"
+                f"```python\n{block['code']}\n```"
+            )
+            for idx, block in enumerate(blocks)
+        )
+        prompt = (
+            "Your generated code has CRITICAL issues. Repair ONLY the listed "
+            "problem blocks and preserve the rest of the file byte-for-byte.\n\n"
+            f"## Target File\n{fname}\n\n"
+            "## Critical Issues Found\n"
+            + "\n".join(f"- {issue}" for issue in issues)
+            + "\n\n## Architecture Blueprint\n"
+            + f"{arch_spec[:2500]}\n\n"
+            "## File Import/Header Context\n"
+            + self._format_repair_header_context(code)
+            + "\n\n## Problem Blocks\n"
+            + block_specs
+            + "\n\n## Other Project Files (summaries)\n"
+            + self._format_file_summaries(files, exclude={fname}, max_chars=_SUMMARY_CHAR_BUDGET)
+            + "\n\n## Output Format\n"
+            "Return ONLY a JSON array. Each item must be:\n"
+            "{\"start_line\": int, \"end_line\": int, \"replacement\": \"full replacement source\"}\n"
+            "Rules:\n"
+            "1. Use the exact start_line/end_line values I provided.\n"
+            "2. replacement must contain the complete corrected code for that block.\n"
+            "3. Do not emit unchanged blocks.\n"
+            "4. Do not emit markdown fences or explanations.\n"
+        )
+        resp = self._chat(self._pm.system("code_generation"), prompt, max_tokens=12288)
+        replacements = self._parse_replacement_array(resp.content)
+        if not replacements:
+            return None
+        return self._apply_line_replacements(code, replacements)
+
+    def _repair_file_with_full_context(
+        self,
+        files: dict[str, str],
+        fname: str,
+        issues: list[str],
+        arch_spec: str,
+        sys_prompt: str,
+    ) -> str | None:
+        repair_ctx = self._build_issue_focused_project_context(
+            files,
+            target_file=fname,
+            issues=issues,
+        )
+        prompt = (
+            "Your generated code has CRITICAL issues that will cause "
+            "runtime failures or invalid results. Fix the target file only.\n\n"
+            f"## Target File\n{fname}\n\n"
+            "## Critical Issues Found\n"
+            + "\n".join(f"- {issue}" for issue in issues)
+            + "\n\n## Architecture Blueprint\n"
+            + f"{arch_spec[:2500]}\n\n"
+            "## Repair Context\n"
+            + repair_ctx
+            + "\n\n## Rules\n"
+            "1. Fix every listed issue for the target file.\n"
+            "2. Preserve imports/contracts required by other files.\n"
+            "3. Do NOT rewrite unrelated files.\n"
+            "4. Output ONLY the corrected target file in ```filename:xxx.py``` format.\n"
+        )
+        resp = self._chat(sys_prompt, prompt, max_tokens=12288)
+        fixed = self._extract_files(resp.content)
+        if not fixed and fname in files:
+            single = self._extract_single_file_code(resp.content, fname)
+            if single:
+                fixed = {fname: single}
+        return fixed.get(fname) if fixed and fname in fixed else None
+
+    @staticmethod
+    def _format_repair_header_context(code: str) -> str:
+        lines = code.splitlines()
+        head = "\n".join(lines[: min(len(lines), 80)])
+        return f"```python\n{head}\n```"
+
+    @staticmethod
+    def _parse_replacement_array(text: str) -> list[dict[str, Any]]:
+        candidates = [text.strip()]
+        fenced = re.search(r"```json\s*\n(.*?)```", text, re.DOTALL)
+        if fenced:
+            candidates.insert(0, fenced.group(1).strip())
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                parsed = json.loads(candidate)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+            if isinstance(parsed, list):
+                valid_items: list[dict[str, Any]] = []
+                for item in parsed:
+                    if (
+                        isinstance(item, dict)
+                        and isinstance(item.get("start_line"), int)
+                        and isinstance(item.get("end_line"), int)
+                        and isinstance(item.get("replacement"), str)
+                    ):
+                        valid_items.append(item)
+                if valid_items:
+                    return valid_items
+        return []
+
+    @staticmethod
+    def _apply_line_replacements(
+        code: str,
+        replacements: list[dict[str, Any]],
+    ) -> str:
+        lines = code.splitlines()
+        ordered = sorted(
+            replacements,
+            key=lambda item: (int(item["start_line"]), int(item["end_line"])),
+            reverse=True,
+        )
+        for item in ordered:
+            start_line = max(1, int(item["start_line"]))
+            end_line = max(start_line, int(item["end_line"]))
+            replacement_lines = str(item["replacement"]).splitlines()
+            lines[start_line - 1:end_line] = replacement_lines
+        return "\n".join(lines) + ("\n" if code.endswith("\n") else "")
+
+    def _build_issue_focused_project_context(
+        self,
+        files: dict[str, str],
+        *,
+        target_file: str,
+        issues: list[str],
+        full_budget: int = _ISSUE_FOCUSED_FILE_CHAR_BUDGET,
+    ) -> str:
+        code = files.get(target_file, "")
+        if not code:
+            return self._build_compact_project_context(
+                files,
+                focus_files={target_file},
+                full_file_order=[target_file],
+                full_budget=full_budget,
+            )
+
+        issue_block = "\n".join(f"- {issue}" for issue in issues[:8]) or "- (no explicit issues)"
+        parts = [
+            "## Target File Issues\n" + issue_block,
+        ]
+        remaining = max(full_budget, 0)
+
+        if self._should_use_problem_block_repair(target_file, code, issues):
+            blocks = self._build_problem_blocks(target_file, code, issues)
+            rendered_blocks: list[str] = []
+            for idx, block in enumerate(blocks[:_ISSUE_FOCUSED_BLOCK_LIMIT]):
+                snippet = self._truncate_code_for_context(
+                    target_file,
+                    str(block.get("code") or ""),
+                    max_chars=min(remaining, 3500),
+                )
+                rendered = (
+                    f"### Problem Block {idx + 1}: {block['qualname']}\n"
+                    f"- kind: {block['kind']}\n"
+                    f"- lines: {block['start_line']}-{block['end_line']}\n"
+                    f"```python\n{snippet}\n```"
+                )
+                rendered_blocks.append(rendered)
+                remaining -= len(snippet)
+                if remaining <= 2000:
+                    break
+            if rendered_blocks:
+                parts.append("## Target File Focused Context\n" + "\n\n".join(rendered_blocks))
+            parts.append("## Target File Header\n" + self._format_repair_header_context(code))
+        else:
+            snippet = self._truncate_code_for_context(
+                target_file,
+                code,
+                max_chars=min(remaining, full_budget),
+            )
+            parts.append(f"```filename:{target_file}\n{snippet}\n```")
+            remaining -= len(snippet)
+
+        summaries = self._format_file_summaries(
+            files,
+            exclude={target_file},
+            max_chars=_SUMMARY_CHAR_BUDGET,
+        )
+        if summaries:
+            parts.append("## Other Files Summary\n" + summaries)
+        return "\n\n".join(part for part in parts if part)
+
+    def _build_review_context(self, files: dict[str, str]) -> str:
+        focus = [fname for fname in _REVIEW_FULL_FILE_ORDER if fname in files]
+        return self._build_compact_project_context(
+            files,
+            focus_files=set(focus),
+            full_file_order=focus,
+            full_budget=_REVIEW_FULL_FILE_CHAR_BUDGET,
+        )
+
+    def _truncate_code_for_context(
+        self,
+        fname: str,
+        code: str,
+        *,
+        max_chars: int,
+    ) -> str:
+        if len(code) <= max_chars:
+            return code
+        lines = code.splitlines()
+        head = "\n".join(lines[:140])
+        tail = "\n".join(lines[-60:]) if len(lines) > 60 else ""
+        summary = self._build_code_summary(fname, code)
+        classes = "\n".join(
+            f"class {cls.get('name', '?')}({', '.join(cls.get('bases', []))})"
+            for cls in summary.get("classes", [])[:20]
+        ) or "(no classes)"
+        functions = "\n".join(
+            f"def {fn.get('name', '?')}({', '.join(fn.get('args', []))})"
+            for fn in summary.get("functions", [])[:30]
+        ) or "(no functions)"
+        payload = (
+            "# File head\n"
+            f"{head}\n\n"
+            "# Class summary\n"
+            f"{classes}\n\n"
+            "# Function summary\n"
+            f"{functions}\n"
+        )
+        if tail:
+            payload += f"\n# File tail\n{tail}\n"
+        if len(payload) > max_chars:
+            payload = payload[:max_chars] + "\n# ... truncated ..."
+        return payload
+
+    def _build_compact_project_context(
+        self,
+        files: dict[str, str],
+        *,
+        focus_files: set[str] | None = None,
+        full_file_order: list[str] | None = None,
+        full_budget: int = _REVIEW_FULL_FILE_CHAR_BUDGET,
+    ) -> str:
+        focus = set(focus_files or set())
+        ordered_focus = list(full_file_order or [])
+        ordered_focus.extend(
+            fname for fname in sorted(focus) if fname not in ordered_focus and fname in files
+        )
+        parts: list[str] = []
+        remaining = max(full_budget, 0)
+        for fname in ordered_focus:
+            code = files.get(fname)
+            if not code:
+                continue
+            if remaining <= 0:
+                break
+            snippet = self._truncate_code_for_context(
+                fname,
+                code,
+                max_chars=remaining,
+            )
+            parts.append(f"```filename:{fname}\n{snippet}\n```")
+            remaining -= len(snippet)
+        summaries = self._format_file_summaries(
+            files,
+            exclude=set(ordered_focus),
+            max_chars=_SUMMARY_CHAR_BUDGET,
+        )
+        if summaries:
+            parts.append("## Other Files Summary\n" + summaries)
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _format_selected_files(
+        files: dict[str, str],
+        selected: list[str],
+    ) -> str:
+        parts = []
+        for fname in selected:
+            code = files.get(fname)
+            if not code:
+                continue
+            parts.append(f"```filename:{fname}\n{code}\n```")
+        return "\n\n".join(parts)
+
+    def _format_file_summaries(
+        self,
+        files: dict[str, str],
+        *,
+        exclude: set[str] | None = None,
+        max_chars: int,
+    ) -> str:
+        excluded = exclude or set()
+        parts: list[str] = []
+        used = 0
+        for fname in sorted(files):
+            if fname in excluded or not fname.endswith(".py"):
+                continue
+            summary = self._build_code_summary(fname, files[fname])
+            class_names = ", ".join(
+                cls.get("name", "?") for cls in summary.get("classes", [])[:6]
+            ) or "none"
+            function_names = ", ".join(
+                fn.get("name", "?") for fn in summary.get("functions", [])[:8]
+            ) or "none"
+            line = (
+                f"- {fname}: {len(files[fname].splitlines())} lines; "
+                f"classes={class_names}; functions={function_names}"
+            )
+            if used + len(line) + 1 > max_chars:
+                break
+            parts.append(line)
+            used += len(line) + 1
+        return "\n".join(parts) or "(no additional files)"
 
     @staticmethod
     def _format_files(files: dict[str, str]) -> str:
@@ -1489,6 +2476,161 @@ class CodeAgent:
         """Log to both Python logger and the internal validation log."""
         logger.info("[CodeAgent] %s", msg)
         self._log.append(msg)
+
+    def _load_state(self) -> dict[str, Any]:
+        if not self._state_path.exists():
+            return {}
+        try:
+            data = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return {}
+        if isinstance(data, dict):
+            files = self._load_files_from_manifest(data.get("file_manifest"))
+            if files:
+                data["files"] = files
+            data.setdefault("phase_substate", None)
+            data.setdefault("next_action", None)
+            data.setdefault("blueprint_index", None)
+            data.setdefault("file_index", None)
+            data.setdefault("current_file", "")
+            data.setdefault("repair_attempt", None)
+            data.setdefault("exec_fix_iteration", None)
+            data.setdefault("review_rounds_completed", 0)
+            data.setdefault("last_saved_at", None)
+        return data if isinstance(data, dict) else {}
+
+    def _save_state(self, updates: dict[str, Any]) -> None:
+        state = self._load_state()
+        state.update(deepcopy(updates))
+        files = self._files_from_state(state)
+        manifest = self._persist_recovery_files(files) if files else []
+        state.pop("files", None)
+        state["state_schema_version"] = 2
+        state["file_manifest"] = manifest
+        state["last_successful_persist_at"] = time.time()
+        state["last_saved_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        state["llm_calls"] = self._calls
+        state["sandbox_runs"] = self._runs
+        state["updated_at"] = time.time()
+        self._atomic_write_json(self._state_path, state)
+        stage = self._infer_stage()
+        if stage is not None:
+            write_code_agent_control_state(
+                self._stage_dir.parent,
+                stage=stage,
+                phase=str(state.get("phase") or ""),
+                phase_substate=str(state.get("phase_substate") or ""),
+                next_action=str(state.get("next_action") or ""),
+                current_file=str(state.get("current_file") or ""),
+                file_index=state.get("file_index") if isinstance(state.get("file_index"), int) else None,
+                blueprint_index=state.get("blueprint_index") if isinstance(state.get("blueprint_index"), int) else None,
+                file_manifest=manifest,
+            )
+
+    def _infer_stage(self) -> Stage | None:
+        stage_name = self._stage_dir.name
+        if not stage_name.startswith("stage-"):
+            return None
+        try:
+            return Stage(int(stage_name.split("-", 1)[1]))
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _files_from_state(state: dict[str, Any]) -> dict[str, str]:
+        files = state.get("files")
+        if not isinstance(files, dict):
+            return {}
+        return {
+            str(name): str(content)
+            for name, content in files.items()
+            if isinstance(name, str) and isinstance(content, str)
+        }
+
+    def _persist_recovery_files(self, files: dict[str, str]) -> list[dict[str, Any]]:
+        self._recovery_dir.mkdir(parents=True, exist_ok=True)
+        manifest: list[dict[str, Any]] = []
+        for name, content in sorted(files.items()):
+            target = (self._recovery_dir / name).resolve()
+            if not target.is_relative_to(self._recovery_dir.resolve()):
+                self._log_event(f"  WARNING: skipping recovery persist for unsafe path {name}")
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            data = content.encode("utf-8")
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(target.parent),
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+            )
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                Path(tmp_path).replace(target)
+            except BaseException:
+                Path(tmp_path).unlink(missing_ok=True)
+                raise
+            stat = target.stat()
+            manifest.append(
+                {
+                    "name": name,
+                    "path": str(target),
+                    "size": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
+        return manifest
+
+    def _load_files_from_manifest(
+        self, manifest: Any,
+    ) -> dict[str, str]:
+        if not isinstance(manifest, list):
+            return {}
+        restored: dict[str, str] = {}
+        base = self._recovery_dir.resolve()
+        for entry in manifest:
+            if not isinstance(entry, dict):
+                return {}
+            name = entry.get("name")
+            path_str = entry.get("path")
+            expected_hash = entry.get("sha256")
+            expected_size = entry.get("size")
+            if not all(isinstance(x, str) for x in (name, path_str, expected_hash)):
+                return {}
+            path = Path(path_str).resolve()
+            if not path.exists() or not path.is_relative_to(base):
+                return {}
+            try:
+                raw = path.read_bytes()
+                stat = path.stat()
+            except OSError:
+                return {}
+            if isinstance(expected_size, int) and stat.st_size != expected_size:
+                return {}
+            if hashlib.sha256(raw).hexdigest() != expected_hash:
+                return {}
+            restored[name] = raw.decode("utf-8")
+        return restored
+
+    @staticmethod
+    def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(path.parent),
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2, ensure_ascii=False)
+                fh.flush()
+                os.fsync(fh.fileno())
+            Path(tmp_path).replace(path)
+        except BaseException:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
 
 
 # ---------------------------------------------------------------------------

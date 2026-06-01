@@ -64,7 +64,6 @@
 
 ## 馃敟 News
 - **[03/22/2026]** [v0.3.2](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.2) 鈥?**丿毓賲 賲鬲毓丿丿 丕賱賲賳氐丕鬲 + 丕爻鬲賯乇丕乇 賰亘賷乇** 鈥?賷毓賲賱 AutoResearchClaw 丕賱丌賳 賲毓 兀賷 賵賰賷賱 賲鬲賵丕賮賯 賲毓 ACP (Claude Code貙 Codex CLI貙 Copilot CLI貙 Gemini CLI貙 Kimi CLI) 賵賷丿毓賲 賲賳氐丕鬲 丕賱賲乇丕爻賱丞 (Discord貙 Telegram貙 Lark貙 WeChat) 毓亘乇 噩爻乇 OpenClaw. 賵丕噩賴丞 禺賱賮賷丞 噩丿賷丿丞 賱鬲賵賱賷丿 丕賱賰賵丿 毓亘乇 CLI-agent 鬲賮賵賾囟 丕賱賲乇丨賱鬲賷賳 10 賵13 賱賵賰賱丕亍 CLI 禺丕乇噩賷賷賳 賲毓 丕賱鬲丨賰賲 賮賷 丕賱賲賷夭丕賳賷丞 賵廿丿丕乇丞 丕賱賲賴賱丞 丕賱夭賲賳賷丞. 賷鬲囟賲賳 賳馗丕賲 賲賰丕賮丨丞 丕賱鬲賱賮賷賯 (VerifiedRegistry + 丨賱賯丞 鬲卮禺賷氐 賵廿氐賱丕丨 丕賱鬲噩丕乇亘)貙 100+ 廿氐賱丕丨 兀禺胤丕亍貙 廿毓丕丿丞 賴賷賰賱丞 modular executor貙 賰卮賮 鬲賱賯丕卅賷 賱賭 `--resume`貙 鬲毓夭賷夭 廿毓丕丿丞 賲丨丕賵賱丕鬲 LLM貙 賵廿氐賱丕丨丕鬲 丕賱賲噩鬲賲毓.
-- **[03/18/2026]** [v0.3.1](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.1) 鈥?**OpenCode Beast Mode + Community Contributions** 鈥?New "Beast Mode" routes complex code generation to [OpenCode](https://github.com/anomalyco/opencode) with automatic complexity scoring and graceful fallback. Added Novita AI provider support, thread-safety hardening, improved LLM output parsing robustness, and 20+ bug fixes from community PRs and internal audit.
 - **[03/17/2026]** [v0.3.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.3.0) 鈥?**MetaClaw Integration** 鈥?AutoResearchClaw now supports [MetaClaw](https://github.com/aiming-lab/MetaClaw) cross-run learning: pipeline failures 鈫?structured lessons 鈫?reusable skills, injected into all 23 stages. **+18.3%** robustness in controlled experiments. Opt-in (`metaclaw_bridge.enabled: true`), fully backward-compatible. See [Integration Guide](#-metaclaw-integration).
 - **[03/16/2026]** [v0.2.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.2.0) 鈥?Three multi-agent subsystems (CodeAgent, BenchmarkAgent, FigureAgent), hardened Docker sandbox with network-policy-aware execution, 4-round paper quality audit (AI-slop detection, 7-dim review scoring, NeurIPS checklist), and 15+ bug fixes from production runs.
 - **[03/15/2026]** [v0.1.0](https://github.com/MikaelCool/My-Own-PhD-Students/releases/tag/v0.1.0) 鈥?We release AutoResearchClaw: a fully autonomous 23-stage research pipeline that turns a single research idea into a conference-ready paper. No human intervention required.
@@ -113,7 +112,6 @@ cd My-Own-PhD-Students
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-# 2. 丕賱廿毓丿丕丿 (鬲賮丕毓賱賷 鈥?賷孬亘賾鬲 OpenCode beast mode貙 賷鬲丨賯賯 賲賳 Docker/LaTeX)
 researchclaw setup
 
 # 3. 丕賱鬲賴賷卅丞
@@ -227,7 +225,6 @@ openclaw_bridge:
 | Codex CLI | `codex` | OpenAI |
 | Copilot CLI | `gh` | GitHub |
 | Gemini CLI | `gemini` | Google |
-| OpenCode | `opencode` | SST |
 | Kimi CLI | `kimi` | Moonshot |
 
 ```yaml
@@ -253,7 +250,6 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 | **賵丕噩賴丞 Python 丕賱亘乇賲噩賷丞** | `from researchclaw.pipeline import Runner; Runner(config).run()` |
 | **Claude Code** | 賷賯乇兀 `RESEARCHCLAW_CLAUDE.md` 鈥?賮賯胤 賯賱 *"卮睾賾賱 亘丨孬丕賸 毓賳 [賲賵囟賵毓]"* |
 | **Copilot CLI** | `researchclaw run --topic "..."` 賲毓 `llm.acp.agent: "gh"` |
-| **OpenCode** | 賷賯乇兀 `.claude/skills/` 鈥?賳賮爻 賵丕噩賴丞 丕賱賱睾丞 丕賱胤亘賷毓賷丞 |
 | **兀賷 賵丕噩賴丞 匕賰丕亍 丕氐胤賳丕毓賷** | 賯丿賾賲 `RESEARCHCLAW_AGENTS.md` 賰爻賷丕賯 鈫?丕賱賵賰賷賱 賷亘丿兀 鬲賱賯丕卅賷丕賸 |
 
 ---
@@ -312,7 +308,6 @@ Phase D: 鬲氐賲賷賲 丕賱鬲噩丕乇亘            Phase H: 丕賱廿賳�
 | **馃摎 兀丿亘賷丕鬲 賲鬲毓丿丿丞 丕賱賲氐丕丿乇** | 兀賵乇丕賯 丨賯賷賯賷丞 賲賳 OpenAlex 賵 Semantic Scholar 賵 arXiv 鈥?鬲賵爻賷毓 丕賱丕爻鬲毓賱丕賲貙 廿夭丕賱丞 丕賱鬲賰乇丕乇貙 賯丕胤毓 丿丕卅乇丞 賲毓 鬲丿賴賵乇 兀賳賷賯 |
 | **馃攳 鬲丨賯賯 賲賳 丕賱丕爻鬲卮賴丕丿丕鬲 毓賱賶 4 胤亘賯丕鬲** | 賮丨氐 arXiv ID 鈫?CrossRef/DataCite DOI 鈫?賲胤丕亘賯丞 毓賳賵丕賳 Semantic Scholar 鈫?鬲賯賷賷賲 氐賱丞 LLM. 丕賱賲乇丕噩毓 丕賱賲購賱賮賾賯丞 鬲購夭丕賱 鬲賱賯丕卅賷丕賸. |
 | **馃枼锔?鬲賳賮賷匕 賵丕毓賺 亘丕賱毓鬲丕丿** | 賰卮賮 鬲賱賯丕卅賷 賱賭 GPU (NVIDIA CUDA / Apple MPS / CPU 賮賯胤) 賲毓 鬲賰賷賷賮 鬲賵賱賷丿 丕賱賰賵丿 賵丕賱丕爻鬲賷乇丕丿丕鬲 賵賳胤丕賯 丕賱鬲噩丕乇亘 |
-| **馃 OpenCode Beast Mode** | 丕賱鬲噩丕乇亘 丕賱賲毓賯丿丞 鬲購賵噩賾賴 鬲賱賯丕卅賷丕賸 廿賱賶 [OpenCode](https://github.com/anomalyco/opencode) 鈥?賷賵賱賾丿 賲卮丕乇賷毓 賲鬲毓丿丿丞 丕賱賲賱賮丕鬲 賲毓 亘賳賶 賲禺氐氐丞 賵丨賱賯丕鬲 鬲丿乇賷亘 賵丿乇丕爻丕鬲 丕爻鬲卅氐丕賱. 丕賱鬲孬亘賷鬲 毓亘乇 `researchclaw setup`. |
 | **馃И 鬲噩丕乇亘 賮賷 亘賷卅丞 賲毓夭賵賱丞** | 賰賵丿 賲購鬲丨賯賯 亘賭 AST貙 廿胤丕乇 睾賷乇 賯丕亘賱 賱賱鬲毓丿賷賱貙 賮卮賱 爻乇賷毓 毓賳丿 NaN/Inf貙 廿氐賱丕丨 匕丕鬲賷貙 鬲丨爻賷賳 鬲賰乇丕乇賷 (丨鬲賶 10 噩賵賱丕鬲)貙 丕賱鬲賯丕胤 賳鬲丕卅噩 噩夭卅賷丞 |
 | **馃摑 賰鬲丕亘丞 亘賲爻鬲賵賶 丕賱賲丐鬲賲乇丕鬲** | 賯賵丕賱亘 NeurIPS/ICML/ICLR貙 氐賷丕睾丞 賯爻賲 亘賯爻賲 (5,000-6,500 賰賱賲丞)貙 丨賲丕賷丞 囟丿 丕賱鬲賱賮賷賯貙 丨賲丕賷丞 胤賵賱 丕賱賲乇丕噩毓丞貙 賮乇囟 賲囟丕丿 賱廿禺賱丕亍丕鬲 丕賱賲爻丐賵賱賷丞 |
 | **馃搻 鬲亘丿賷賱 丕賱賯賵丕賱亘** | `neurips_2025`貙 `iclr_2026`貙 `icml_2026` 鈥?Markdown 鈫?LaTeX 賲毓 乇賷丕囟賷丕鬲 賵噩丿丕賵賱 賵兀卮賰丕賱 賵賲乇丕噩毓 鬲亘丕丿賱賷丞 賵 `\cite{}` |
@@ -451,12 +446,10 @@ experiment:
     host: ""                       # 丕爻賲 賲囟賷賮 禺丕丿賲 GPU
     gpu_ids: []                    # 賲毓乇賾賮丕鬲 GPU 丕賱賲鬲丕丨丞
     remote_workdir: "/tmp/researchclaw_experiments"
-  opencode:                          # OpenCode Beast Mode (賷購孬亘賾鬲 鬲賱賯丕卅賷丕賸 毓亘乇 `researchclaw setup`)
     enabled: true                    # 丕賱賲賮鬲丕丨 丕賱乇卅賷爻賷 (丕賱丕賮鬲乇丕囟賷: true)
     auto: true                       # 鬲卮睾賷賱 鬲賱賯丕卅賷 亘丿賵賳 鬲兀賰賷丿 (丕賱丕賮鬲乇丕囟賷: true)
     complexity_threshold: 0.2        # 0.0-1.0 鈥?兀毓賱賶 = 賮賯胤 賱賱鬲噩丕乇亘 丕賱賲毓賯丿丞
     model: ""                        # 鬲噩丕賵夭 丕賱賳賲賵匕噩 (賮丕乇睾 = 賷爻鬲禺丿賲 llm.primary_model)
-    timeout_sec: 600                 # 兀賯氐賶 孬賵丕賳賺 賱鬲賵賱賷丿 OpenCode
     max_retries: 1                   # 毓丿丿 丕賱賲丨丕賵賱丕鬲 毓賳丿 丕賱賮卮賱
     workspace_cleanup: true          # 丨匕賮 賲爻丕丨丞 丕賱毓賲賱 丕賱賲丐賯鬲丞 亘毓丿 丕賱噩賲毓
 

@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from researchclaw.config import ExperimentConfig
-from researchclaw.experiment.sandbox import ExperimentSandbox, SandboxProtocol
+from researchclaw.experiment.sandbox import (
+    ExperimentSandbox,
+    SandboxNotifyCallback,
+    SandboxProtocol,
+    StopRequestedCallback,
+)
 
 if TYPE_CHECKING:
     from researchclaw.experiment.agentic_sandbox import AgenticSandbox
@@ -15,7 +20,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def create_sandbox(config: ExperimentConfig, workdir: Path) -> SandboxProtocol:
+def create_sandbox(
+    config: ExperimentConfig,
+    workdir: Path,
+    *,
+    notify_callback: SandboxNotifyCallback | None = None,
+    stop_requested: StopRequestedCallback | None = None,
+) -> SandboxProtocol:
     """Return the appropriate sandbox backend for *config.mode*.
 
     - ``"sandbox"`` → :class:`ExperimentSandbox` (subprocess)
@@ -31,7 +42,12 @@ def create_sandbox(config: ExperimentConfig, workdir: Path) -> SandboxProtocol:
                 "Docker daemon is not reachable — "
                 "falling back to subprocess sandbox."
             )
-            return ExperimentSandbox(config.sandbox, workdir)
+            return ExperimentSandbox(
+                config.sandbox,
+                workdir,
+                notify_callback=notify_callback,
+                stop_requested=stop_requested,
+            )
 
         if not DockerSandbox.ensure_image(docker_cfg.image):
             raise RuntimeError(
@@ -42,7 +58,13 @@ def create_sandbox(config: ExperimentConfig, workdir: Path) -> SandboxProtocol:
         if docker_cfg.gpu_enabled:
             logger.info("Docker sandbox: GPU passthrough enabled")
 
-        return DockerSandbox(docker_cfg, workdir)
+        return DockerSandbox(
+            docker_cfg,
+            workdir,
+            sandbox_config=config.sandbox,
+            notify_callback=notify_callback,
+            stop_requested=stop_requested,
+        )
 
     if config.mode == "ssh_remote":
         from researchclaw.experiment.ssh_sandbox import SshRemoteSandbox
@@ -87,7 +109,12 @@ def create_sandbox(config: ExperimentConfig, workdir: Path) -> SandboxProtocol:
             f"Unsupported experiment mode for create_sandbox(): {config.mode}"
         )
 
-    return ExperimentSandbox(config.sandbox, workdir)
+    return ExperimentSandbox(
+        config.sandbox,
+        workdir,
+        notify_callback=notify_callback,
+        stop_requested=stop_requested,
+    )
 
 
 def create_agentic_sandbox(

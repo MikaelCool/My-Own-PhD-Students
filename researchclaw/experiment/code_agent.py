@@ -17,6 +17,7 @@ Usage::
 
 from __future__ import annotations
 
+import glob
 import logging
 import os
 import shutil
@@ -30,6 +31,32 @@ from typing import Any, Protocol
 from researchclaw.config import RCConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_cli_binary(name: str) -> str | None:
+    """Resolve CLI tools from PATH plus stable local install locations."""
+    resolved = shutil.which(name)
+    if resolved:
+        return resolved
+    if name == "codex":
+        candidates = [
+            os.path.expanduser("~/.local/bin/codex"),
+            os.path.expanduser("~/.codex/bin/codex"),
+        ]
+        candidates.extend(
+            sorted(
+                glob.glob(
+                    os.path.expanduser(
+                        "~/.vscode-server/extensions/openai.chatgpt-*/bin/linux-x86_64/codex"
+                    )
+                ),
+                reverse=True,
+            )
+        )
+        for candidate in candidates:
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -744,7 +771,7 @@ def create_code_agent(
         return LlmCodeAgent(llm, prompts or PromptManager(), config)  # type: ignore[return-value]
 
     if provider == "claude_code":
-        binary = agent_cfg.binary_path or shutil.which("claude")
+        binary = agent_cfg.binary_path or _resolve_cli_binary("claude") or shutil.which("claude")
         if not binary:
             raise RuntimeError(
                 "Claude Code binary not found. "
@@ -759,7 +786,7 @@ def create_code_agent(
         )
 
     if provider == "codex":
-        binary = agent_cfg.binary_path or shutil.which("codex")
+        binary = agent_cfg.binary_path or _resolve_cli_binary("codex") or shutil.which("codex")
         if not binary:
             raise RuntimeError(
                 "Codex binary not found. "

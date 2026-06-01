@@ -116,7 +116,7 @@ stages:
       Design an experiment plan as YAML.
 
       Required keys:
-      objectives,datasets,baselines,proposed_methods,ablations,metrics,risks,compute_budget
+      objectives,datasets,baselines,proposed_methods,ablations,metrics,risks,compute_budget,story_background,target_sota_context,baseline_failure_modes,must_run_experiments,nice_to_have_experiments,stop_conditions
 
       Hard constraints:
       - Proposed methods must reflect 2-3 theory-bearing innovations derived from the baseline briefing.
@@ -125,6 +125,9 @@ stages:
       - Add robustness, sensitivity, and component-isolation ablations beyond the baseline paper where justified.
       - Include statistical testing and at least one failure-case analysis path.
       - Do not promise SOTA unless the plan can actually measure it.
+      - For each proposed method, define a concrete story background: what deployment/scientific regime makes this method matter, why the strongest baseline is insufficient there, and what exact evidence would make the story believable.
+      - Separate must-run experiments from nice-to-have experiments. If compute is tight, drop nice-to-have items first instead of collapsing baseline fairness.
+      - Prefer a strong, honest paper story with solid evidence over chasing another rerun for marginal score improvements.
 
   research_decision:
     system: You are deciding whether the current evidence base is strong enough to proceed to paper writing.
@@ -141,6 +144,9 @@ stages:
       - If the evidence gate marks major claims as only partial or unsupported, prefer REFINE unless the paper can be honestly reframed.
       - Do not allow broad novelty or SOTA claims to pass without direct support.
       - The justification must cite the actual evidence status, not optimism.
+      - Do NOT trigger PIVOT just because the score is lower than hoped. Pivot only when the story is fundamentally broken, the baseline framing is wrong, or the experiments invalidate the core hypothesis.
+      - If the story is still defensible after claim narrowing, prefer PROCEED with a narrower claim set over endless reruns.
+      - If recommending REFINE, name the exact 1-3 missing experiments that would unblock the paper. If you cannot name them concretely, do not recommend REFINE.
 
   result_to_claim:
     system: You are a strict claim-calibration reviewer converting experiment outcomes into defensible paper claims.

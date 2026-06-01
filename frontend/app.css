@@ -558,6 +558,12 @@ h2,
   background: #b42318;
 }
 
+.canvas-node-box.type-supervisor,
+.legend-swatch.type-supervisor {
+  fill: #e5eefb;
+  background: #3662b3;
+}
+
 .canvas-node-box.type-contract,
 .canvas-node-box.type-objective,
 .canvas-node-box.type-baseline,

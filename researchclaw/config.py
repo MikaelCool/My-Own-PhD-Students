@@ -220,6 +220,7 @@ class AcpConfig:
     acpx_command: str = ""
     session_name: str = "researchclaw"
     timeout_sec: int = 1800
+    gateway_timeout_sec: int = 900
 
 
 @dataclass(frozen=True)
@@ -247,6 +248,12 @@ class SecurityConfig:
 class SandboxConfig:
     python_path: str = DEFAULT_PYTHON_PATH
     gpu_required: bool = False
+    gpu_auto_select: bool = True
+    gpu_allowed_ids: tuple[int, ...] = ()
+    gpu_idle_util_threshold: int = 10
+    gpu_idle_memory_mb_threshold: int = 1024
+    gpu_wait_timeout_sec: int = 600
+    gpu_poll_interval_sec: int = 15
     allowed_imports: tuple[str, ...] = (
         "math",
         "random",
@@ -303,6 +310,7 @@ class DockerSandboxConfig:
     shm_size_mb: int = 2048
     container_python: str = "/usr/bin/python3"
     keep_containers: bool = False
+    shared_cache_root: str = ""
 
 
 @dataclass(frozen=True)
@@ -340,7 +348,7 @@ class CodeAgentConfig:
     hard_validation_max_repairs: int = 4
     # Phase 3: Execution-in-the-loop (run → parse error → fix)
     exec_fix_max_iterations: int = 3
-    exec_fix_timeout_sec: int = 60
+    exec_fix_timeout_sec: int = 180
     # Phase 4: Solution tree search (off by default — higher cost)
     tree_search_enabled: bool = False
     tree_search_candidates: int = 3
@@ -348,22 +356,6 @@ class CodeAgentConfig:
     tree_search_eval_timeout_sec: int = 120
     # Phase 5: Multi-agent review dialog
     review_max_rounds: int = 2
-
-
-@dataclass(frozen=True)
-class OpenCodeConfig:
-    """OpenCode 'Beast Mode' — external AI coding agent for complex experiments.
-
-    Requires: npm i -g opencode-ai@latest
-    """
-
-    enabled: bool = True
-    auto: bool = True  # Auto-trigger without user confirmation
-    complexity_threshold: float = 0.2  # 0.0-1.0
-    model: str = ""  # Empty = use llm.primary_model
-    timeout_sec: int = 600  # Max seconds for opencode run
-    max_retries: int = 1
-    workspace_cleanup: bool = True
 
 
 @dataclass(frozen=True)
@@ -429,7 +421,6 @@ class ExperimentRepairConfig:
     max_cycles: int = 3
     min_completion_rate: float = 0.5  # At least 50% conditions must complete
     min_conditions: int = 2  # At least 2 conditions for a valid experiment
-    use_opencode: bool = True  # Use OpenCode agent for repairs (vs LLM prompt)
     timeout_sec_per_cycle: int = 600  # Max time per repair cycle
 
 
@@ -468,7 +459,6 @@ class ExperimentConfig:
     ssh_remote: SshRemoteConfig = field(default_factory=SshRemoteConfig)
     colab_drive: ColabDriveConfig = field(default_factory=ColabDriveConfig)
     code_agent: CodeAgentConfig = field(default_factory=CodeAgentConfig)
-    opencode: OpenCodeConfig = field(default_factory=OpenCodeConfig)
     benchmark_agent: BenchmarkAgentConfig = field(default_factory=BenchmarkAgentConfig)
     figure_agent: FigureAgentConfig = field(default_factory=FigureAgentConfig)
     repair: ExperimentRepairConfig = field(default_factory=ExperimentRepairConfig)
@@ -499,6 +489,18 @@ class MetaClawLessonToSkillConfig:
 
 
 @dataclass(frozen=True)
+class MetaClawSkillEvolutionConfig:
+    """Controlled skill evolution loop settings."""
+
+    enabled: bool = True
+    max_candidates_per_run: int = 2
+    max_trial_skills: int = 1
+    min_trial_records: int = 2
+    promote_success_rate: float = 0.65
+    reject_success_rate: float = 0.35
+
+
+@dataclass(frozen=True)
 class MetaClawBridgeConfig:
     """MetaClaw integration bridge configuration."""
 
@@ -510,6 +512,9 @@ class MetaClawBridgeConfig:
     prm: MetaClawPRMConfig = field(default_factory=MetaClawPRMConfig)
     lesson_to_skill: MetaClawLessonToSkillConfig = field(
         default_factory=MetaClawLessonToSkillConfig
+    )
+    skill_evolution: MetaClawSkillEvolutionConfig = field(
+        default_factory=MetaClawSkillEvolutionConfig
     )
 
 
@@ -1069,6 +1074,7 @@ def _parse_llm_config(data: dict[str, Any]) -> LlmConfig:
             acpx_command=acp_data.get("acpx_command", ""),
             session_name=acp_data.get("session_name", "researchclaw"),
             timeout_sec=int(acp_data.get("timeout_sec", 1800)),
+            gateway_timeout_sec=int(acp_data.get("gateway_timeout_sec", 900)),
         ),
     )
 
@@ -1108,6 +1114,20 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
         sandbox=SandboxConfig(
             python_path=sandbox_data.get("python_path", DEFAULT_PYTHON_PATH),
             gpu_required=bool(sandbox_data.get("gpu_required", False)),
+            gpu_auto_select=bool(sandbox_data.get("gpu_auto_select", True)),
+            gpu_allowed_ids=tuple(int(g) for g in sandbox_data.get("gpu_allowed_ids", ())),
+            gpu_idle_util_threshold=_safe_int(
+                sandbox_data.get("gpu_idle_util_threshold"), 10
+            ),
+            gpu_idle_memory_mb_threshold=_safe_int(
+                sandbox_data.get("gpu_idle_memory_mb_threshold"), 1024
+            ),
+            gpu_wait_timeout_sec=_safe_int(
+                sandbox_data.get("gpu_wait_timeout_sec"), 600
+            ),
+            gpu_poll_interval_sec=_safe_int(
+                sandbox_data.get("gpu_poll_interval_sec"), 15
+            ),
             allowed_imports=tuple(
                 sandbox_data.get("allowed_imports", SandboxConfig.allowed_imports)
             ),
@@ -1126,6 +1146,7 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
             shm_size_mb=_safe_int(docker_data.get("shm_size_mb"), 2048),
             container_python=docker_data.get("container_python", "/usr/bin/python3"),
             keep_containers=bool(docker_data.get("keep_containers", False)),
+            shared_cache_root=docker_data.get("shared_cache_root", ""),
         ),
         ssh_remote=SshRemoteConfig(
             host=ssh_data.get("host", ""),
@@ -1159,7 +1180,6 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
         ),
         agentic=_parse_agentic_config(data.get("agentic") or {}),
         code_agent=_parse_code_agent_config(data.get("code_agent") or {}),
-        opencode=_parse_opencode_config(data.get("opencode") or {}),
         benchmark_agent=_parse_benchmark_agent_config(
             data.get("benchmark_agent") or {}
         ),
@@ -1216,7 +1236,6 @@ def _parse_experiment_repair_config(data: dict[str, Any]) -> ExperimentRepairCon
         max_cycles=_safe_int(data.get("max_cycles"), 3),
         min_completion_rate=_safe_float(data.get("min_completion_rate"), 0.5),
         min_conditions=_safe_int(data.get("min_conditions"), 2),
-        use_opencode=bool(data.get("use_opencode", True)),
         timeout_sec_per_cycle=_safe_int(data.get("timeout_sec_per_cycle"), 600),
     )
 
@@ -1246,7 +1265,7 @@ def _parse_code_agent_config(data: dict[str, Any]) -> CodeAgentConfig:
             data.get("hard_validation_max_repairs"), 4
         ),
         exec_fix_max_iterations=_safe_int(data.get("exec_fix_max_iterations"), 3),
-        exec_fix_timeout_sec=_safe_int(data.get("exec_fix_timeout_sec"), 60),
+        exec_fix_timeout_sec=_safe_int(data.get("exec_fix_timeout_sec"), 180),
         tree_search_enabled=bool(data.get("tree_search_enabled", False)),
         tree_search_candidates=_safe_int(data.get("tree_search_candidates"), 3),
         tree_search_max_depth=_safe_int(data.get("tree_search_max_depth"), 2),
@@ -1257,23 +1276,10 @@ def _parse_code_agent_config(data: dict[str, Any]) -> CodeAgentConfig:
     )
 
 
-def _parse_opencode_config(data: dict[str, Any]) -> OpenCodeConfig:
-    if not data:
-        return OpenCodeConfig()
-    return OpenCodeConfig(
-        enabled=bool(data.get("enabled", True)),
-        auto=bool(data.get("auto", True)),
-        complexity_threshold=_safe_float(data.get("complexity_threshold"), 0.2),
-        model=str(data.get("model", "")),
-        timeout_sec=_safe_int(data.get("timeout_sec"), 600),
-        max_retries=_safe_int(data.get("max_retries"), 1),
-        workspace_cleanup=bool(data.get("workspace_cleanup", True)),
-    )
-
-
 def _parse_metaclaw_bridge_config(data: dict[str, Any]) -> MetaClawBridgeConfig:
     prm_data = data.get("prm") or {}
     l2s_data = data.get("lesson_to_skill") or {}
+    se_data = data.get("skill_evolution") or {}
     return MetaClawBridgeConfig(
         enabled=bool(data.get("enabled", False)),
         proxy_url=data.get("proxy_url", "http://localhost:30000"),
@@ -1296,6 +1302,14 @@ def _parse_metaclaw_bridge_config(data: dict[str, Any]) -> MetaClawBridgeConfig:
             enabled=bool(l2s_data.get("enabled", True)),
             min_severity=l2s_data.get("min_severity", "warning"),
             max_skills_per_run=_safe_int(l2s_data.get("max_skills_per_run"), 3),
+        ),
+        skill_evolution=MetaClawSkillEvolutionConfig(
+            enabled=bool(se_data.get("enabled", True)),
+            max_candidates_per_run=_safe_int(se_data.get("max_candidates_per_run"), 2),
+            max_trial_skills=_safe_int(se_data.get("max_trial_skills"), 1),
+            min_trial_records=_safe_int(se_data.get("min_trial_records"), 2),
+            promote_success_rate=_safe_float(se_data.get("promote_success_rate"), 0.65),
+            reject_success_rate=_safe_float(se_data.get("reject_success_rate"), 0.35),
         ),
     )
 

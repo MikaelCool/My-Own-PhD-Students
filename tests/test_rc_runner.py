@@ -194,6 +194,59 @@ def test_execute_pipeline_writes_pipeline_summary_json(
     assert summary_path.exists()
 
 
+def test_execute_pipeline_writes_run_control_state(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-control",
+        config=rc_config,
+        adapters=adapters,
+    )
+    state = cast(
+        dict[str, Any],
+        json.loads((run_dir / "run_control_state.json").read_text(encoding="utf-8")),
+    )
+    assert state["current_substep"] == "pipeline_complete"
+    assert state["current_stage"] == int(Stage.CITATION_VERIFY)
+    assert state["overall_status"] == StageStatus.DONE.value
+    assert state["current_action"] == "proceed"
+    assert state["observers"]["stage_progress"]["status"] == StageStatus.DONE.value
+
+
+def test_execute_pipeline_marks_final_checkpoint_completed(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-complete-checkpoint",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    checkpoint = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    assert checkpoint["stage"] == int(Stage.CITATION_VERIFY)
+    assert checkpoint["last_completed_stage"] == int(Stage.CITATION_VERIFY)
+    assert checkpoint["status"] == "completed"
+    assert rc_runner.read_checkpoint(run_dir) is None
+
+
 def test_pipeline_summary_has_expected_fields_and_values(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
@@ -652,6 +705,15 @@ def test_record_decision_history_appends(run_dir: Path) -> None:
     assert len(history) == 2
     assert history[0]["decision"] == "pivot"
     assert history[1]["decision"] == "refine"
+    run_index = json.loads((run_dir / "run_index.json").read_text(encoding="utf-8"))
+    supervisor_events = [
+        item for item in run_index["events"] if item.get("event") == "supervisor_event"
+    ]
+    assert len(supervisor_events) == 2
+    assert supervisor_events[0]["event_type"] == "pivot_hypothesis"
+    assert supervisor_events[0]["stage_name"] == Stage.HYPOTHESIS_GEN.name
+    assert supervisor_events[1]["event_type"] == "rollback_to_stage"
+    assert supervisor_events[1]["stage_name"] == Stage.ITERATIVE_REFINE.name
 
 
 # ── Deliverables packaging tests ──
@@ -1052,6 +1114,45 @@ class TestPromoteBestStage14BestJson:
         data = json.loads(best_path.read_text(encoding="utf-8"))
         pm = data["metrics_summary"]["primary_metric"]
         assert pm["mean"] == 64.46
+
+    def test_condition_level_metric_beats_stale_top_level_metric(
+        self, run_dir: Path, rc_config: RCConfig
+    ) -> None:
+        """Prefer best condition summary when top-level primary_metric is stale."""
+        current = run_dir / "stage-14"
+        current.mkdir(parents=True, exist_ok=True)
+        (current / "experiment_summary.json").write_text(
+            json.dumps(
+                {
+                    "metrics_summary": {
+                        "primary_metric": {
+                            "min": 0.220636,
+                            "max": 0.220636,
+                            "mean": 0.220636,
+                            "count": 1,
+                        }
+                    },
+                    "condition_summaries": {
+                        "exact_svd_oracle_controller": {
+                            "metrics": {"primary_metric_mean": 0.182022}
+                        },
+                        "falcon_qb_activation_rank": {
+                            "metrics": {"primary_metric_mean": 0.189296}
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        rc_runner._promote_best_stage14(run_dir, rc_config)  # type: ignore[attr-defined]
+
+        best_data = json.loads(
+            (run_dir / "experiment_summary_best.json").read_text(encoding="utf-8")
+        )
+        assert (
+            best_data["metrics_summary"]["primary_metric"]["mean"] == 0.182022
+        )
 
 
 class TestPromoteBestStage14AnalysisBest:

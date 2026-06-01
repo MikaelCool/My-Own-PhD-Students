@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+def _has_latex_engine() -> bool:
+    return shutil.which("pdflatex") is not None or shutil.which("tectonic") is not None
+
+
 @dataclass
 class EnvironmentReport:
     """Report of detected environment capabilities."""
@@ -69,7 +73,7 @@ def detect_environment() -> EnvironmentReport:
         pass
 
     # LaTeX
-    report.has_latex = shutil.which("pdflatex") is not None
+    report.has_latex = _has_latex_engine()
 
     # Memory
     try:

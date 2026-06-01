@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,7 @@ from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
 from researchclaw.experiment.validator import (
     CodeValidation,
+    detect_non_code_response,
     format_issues_for_llm,
     validate_code,
 )
@@ -19,7 +22,9 @@ from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._domain import _detect_domain
 from researchclaw.pipeline._helpers import (
     StageResult,
+    _build_experiment_plan_summary,
     _chat_with_prompt,
+    _compress_instruction_block,
     _ensure_sandbox_deps,
     _extract_code_block,
     _extract_multi_file_blocks,
@@ -64,6 +69,572 @@ def _check_rl_compatibility(code: str) -> list[str]:
     return errors
 
 
+def _sync_experiment_dir(exp_dir: Path, files: dict[str, str]) -> None:
+    """Rewrite the experiment directory from the in-memory file set.
+
+    This prevents stale or partially repaired files from surviving across
+    regeneration / repair passes.
+    """
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    for old_item in exp_dir.iterdir():
+        if old_item.is_file() and old_item.name not in files:
+            old_item.unlink(missing_ok=True)
+    for fname, code in files.items():
+        (exp_dir / fname).write_text(code, encoding="utf-8")
+
+
+def _effective_network_policy(config: RCConfig) -> str:
+    """Return the effective network policy for code generation artifacts."""
+    if config.experiment.mode == "docker":
+        return config.experiment.docker.network_policy
+    if config.experiment.mode == "sandbox":
+        return "none"
+    return "full"
+
+
+def _load_benchmark_plan(run_dir: Path) -> dict[str, Any]:
+    for s9_dir in sorted(run_dir.glob("stage-09*"), reverse=True):
+        candidate = s9_dir / "benchmark_plan.json"
+        if candidate.exists():
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to load benchmark plan from %s", candidate, exc_info=True)
+    return {}
+
+
+def _detect_required_pip_packages(files: dict[str, str]) -> list[str]:
+    """Infer non-builtin pip packages from generated files.
+
+    This mirrors DockerSandbox auto-detection so Stage 10 validation uses the
+    same contract as Stage 12 execution.
+    """
+    try:
+        from researchclaw.experiment.docker_sandbox import (
+            _BUILTIN_PACKAGES,
+            _IMPORT_TO_PIP,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+
+    import_re = re.compile(r"^\s*(?:import|from)\s+([\w.]+)", re.MULTILINE)
+    local_modules = {
+        name[:-3] for name in files if name.endswith(".py")
+    }
+    ignore_modules = {
+        "__future__",
+        "researchclaw",
+        "experiment_config",
+        "importlib",
+        "pathlib",
+        "typing",
+        "dataclasses",
+        "collections",
+        "functools",
+        "itertools",
+        "json",
+        "math",
+        "os",
+        "re",
+        "sys",
+        "time",
+        "hashlib",
+    }
+    detected: list[str] = []
+    for fname, text in files.items():
+        if not fname.endswith(".py"):
+            continue
+        for match in import_re.finditer(text):
+            top_module = match.group(1).split(".")[0]
+            if (
+                top_module in ignore_modules
+                or top_module in _BUILTIN_PACKAGES
+                or top_module in local_modules
+            ):
+                continue
+            pip_name = _IMPORT_TO_PIP.get(top_module, top_module)
+            if pip_name not in detected:
+                detected.append(pip_name)
+    return detected
+
+
+def _sanitize_requirement_entries(entries: list[str]) -> list[str]:
+    valid_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9_,.-]+\])?(?:[<>=!~]=?.*)?$")
+    blocked = {
+        "__future__",
+        "importlib",
+        "researchclaw",
+        "experiment_config",
+        "config",
+    }
+    cleaned: list[str] = []
+    for raw in entries:
+        item = raw.strip()
+        if not item or item.startswith("#"):
+            continue
+        base = re.split(r"[<>=!~\[]", item, maxsplit=1)[0].strip()
+        if not base or base in blocked:
+            continue
+        if not valid_pattern.match(item):
+            continue
+        if item not in cleaned:
+            cleaned.append(item)
+    return cleaned
+
+
+def _compact_project_context_for_repair(
+    files: dict[str, str],
+    *,
+    focus_file: str,
+    focus_char_budget: int = 16000,
+    summary_char_budget: int = 8000,
+) -> str:
+    parts: list[str] = []
+    focus_code = files.get(focus_file, "")
+    if focus_code:
+        if len(focus_code) <= focus_char_budget:
+            focus_payload = focus_code
+        else:
+            lines = focus_code.splitlines()
+            head = "\n".join(lines[:160])
+            tail = "\n".join(lines[-80:]) if len(lines) > 80 else ""
+            signatures = re.findall(
+                r"^(class\s+[A-Za-z_][A-Za-z0-9_]*.*|def\s+[A-Za-z_][A-Za-z0-9_]*\s*\(.*)",
+                focus_code,
+                re.MULTILINE,
+            )
+            signature_block = "\n".join(signatures[:120])
+            focus_payload = (
+                "# File head\n"
+                f"{head}\n\n"
+                "# Symbol signatures\n"
+                f"{signature_block or '(none)'}\n"
+            )
+            if tail:
+                focus_payload += f"\n# File tail\n{tail}\n"
+            if len(focus_payload) > focus_char_budget:
+                focus_payload = focus_payload[:focus_char_budget] + "\n# ... truncated ..."
+        parts.append(f"```filename:{focus_file}\n{focus_payload}\n```")
+
+    summary_lines: list[str] = []
+    used = 0
+    for fname in sorted(files):
+        if fname == focus_file or not fname.endswith(".py"):
+            continue
+        code = files[fname]
+        imports = re.findall(r"^(?:from|import)\s+([a-zA-Z_][\w.]*)", code, re.MULTILINE)
+        line = (
+            f"- {fname}: {len(code.splitlines())} lines; "
+            f"imports={', '.join(imports[:6]) or 'none'}"
+        )
+        if used + len(line) + 1 > summary_char_budget:
+            break
+        summary_lines.append(line)
+        used += len(line) + 1
+    if summary_lines:
+        parts.append("## Other Files Summary\n" + "\n".join(summary_lines))
+    return "\n\n".join(parts)
+
+
+def _extract_issue_filename(issue: str) -> str | None:
+    match = re.search(r"\[([^\]]+\.py)\]", issue)
+    if match:
+        return match.group(1)
+    match = re.search(r"\b([A-Za-z0-9_]+\.py)\b", issue)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _extract_issue_symbols(issue: str) -> list[str]:
+    symbols: list[str] = []
+    for item in re.findall(r"'([A-Za-z_][A-Za-z0-9_]*)'", issue):
+        if item not in symbols:
+            symbols.append(item)
+    return symbols
+
+
+def _infer_issue_file_from_symbols(
+    files: dict[str, str],
+    issue: str,
+) -> str | None:
+    class_names = _extract_issue_symbols(issue)
+    if not class_names:
+        return None
+    for fname, code in files.items():
+        if not fname.endswith(".py"):
+            continue
+        if all(re.search(rf"^\s*class\s+{re.escape(name)}\b", code, re.MULTILINE) for name in class_names[:2]):
+            return fname
+    return None
+
+
+def _is_auto_repairable_deep_issue(issue: str) -> bool:
+    lower = issue.lower()
+    if "shadows stdlib/pip" in lower:
+        return False
+    return True
+
+
+def _auto_repairable_issue_set(issues: list[str]) -> set[str]:
+    return {
+        issue for issue in issues
+        if any(
+            kw in issue for kw in (
+                "UnboundLocalError", "unregistered", "does not exist",
+                "empty or trivial subclass", "does NOT override",
+                "Import-usage mismatch", "NameError",
+                "was removed", "ptp()",
+                "copy-paste", "identical method signatures",
+                "identical AST", "NOT a real ablation",
+            )
+        )
+    }
+
+
+def _group_deep_issues_by_file(
+    files: dict[str, str],
+    issues: list[str],
+) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    for issue in issues:
+        fname = _extract_issue_filename(issue) or _infer_issue_file_from_symbols(files, issue)
+        if not fname:
+            continue
+        grouped.setdefault(fname, []).append(issue)
+    return grouped
+
+
+def _collect_symbol_spans(code: str) -> list[dict[str, Any]]:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+
+    spans: list[dict[str, Any]] = []
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            spans.append(
+                {
+                    "name": node.name,
+                    "kind": "class",
+                    "start_line": node.lineno,
+                    "end_line": getattr(node, "end_lineno", node.lineno),
+                }
+            )
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            spans.append(
+                {
+                    "name": node.name,
+                    "kind": "function",
+                    "start_line": node.lineno,
+                    "end_line": getattr(node, "end_lineno", node.lineno),
+                }
+            )
+    return spans
+
+
+def _extract_named_symbol_blocks(
+    code: str,
+    symbol_names: list[str],
+    *,
+    max_blocks: int = 6,
+) -> list[dict[str, Any]]:
+    if not symbol_names:
+        return []
+    lines = code.splitlines()
+    spans = _collect_symbol_spans(code)
+    blocks: list[dict[str, Any]] = []
+    for symbol in symbol_names:
+        for span in spans:
+            if span["name"] != symbol:
+                continue
+            start = max(1, int(span["start_line"]) - 2)
+            end = min(len(lines), int(span["end_line"]) + 2)
+            blocks.append(
+                {
+                    "name": symbol,
+                    "kind": span["kind"],
+                    "start_line": start,
+                    "end_line": end,
+                    "code": "\n".join(lines[start - 1:end]),
+                }
+            )
+            break
+        if len(blocks) >= max_blocks:
+            break
+    return blocks
+
+
+def _build_symbol_repair_context(
+    files: dict[str, str],
+    *,
+    focus_file: str,
+    issues: list[str],
+) -> str:
+    code = files.get(focus_file, "")
+    if not code:
+        return _compact_project_context_for_repair(files, focus_file=focus_file)
+
+    lines = code.splitlines()
+    header = "\n".join(lines[: min(len(lines), 80)])
+    symbols: list[str] = []
+    for issue in issues:
+        for symbol in _extract_issue_symbols(issue):
+            if symbol not in symbols:
+                symbols.append(symbol)
+    blocks = _extract_named_symbol_blocks(code, symbols)
+    parts = [f"```filename:{focus_file}\n# File header\n{header}\n```"]
+    if blocks:
+        block_text = "\n\n".join(
+            (
+                f"### {block['kind']} {block['name']} "
+                f"(lines {block['start_line']}-{block['end_line']})\n"
+                f"```python\n{block['code']}\n```"
+            )
+            for block in blocks
+        )
+        parts.append("## Relevant Symbol Blocks\n" + block_text)
+    else:
+        parts.append(_compact_project_context_for_repair(files, focus_file=focus_file))
+
+    summary_lines: list[str] = []
+    for fname in sorted(files):
+        if fname == focus_file or not fname.endswith(".py"):
+            continue
+        summary_lines.append(f"- {fname}: {len(files[fname].splitlines())} lines")
+    if summary_lines:
+        parts.append("## Other Files\n" + "\n".join(summary_lines[:6]))
+    return "\n\n".join(parts)
+
+
+def _file_issue_set(files: dict[str, str], focus_file: str) -> set[str]:
+    from researchclaw.experiment.validator import deep_validate_files
+
+    warnings = deep_validate_files(files)
+    auto = _auto_repairable_issue_set(warnings)
+    grouped = _group_deep_issues_by_file(files, list(auto))
+    return set(grouped.get(focus_file, []))
+
+
+def _extract_single_named_file(content: str, expected_name: str) -> str:
+    if detect_non_code_response(content):
+        return ""
+    fenced = re.search(
+        rf"```(?:filename:)?{re.escape(expected_name)}\s*\n(.*?)```",
+        content,
+        re.DOTALL,
+    )
+    if fenced:
+        candidate = fenced.group(1).strip()
+        if not detect_non_code_response(candidate):
+            return candidate
+    generic = re.search(r"```python\s*\n(.*?)```", content, re.DOTALL)
+    if generic:
+        candidate = generic.group(1).strip()
+        if not detect_non_code_response(candidate):
+            return candidate
+    stripped = content.strip()
+    if stripped.startswith(("from ", "import ", "class ", "def ", '"""')):
+        return stripped
+    return ""
+
+
+def _maybe_add_requirements_file(
+    files: dict[str, str],
+    benchmark_plan: dict[str, Any],
+    config: RCConfig,
+) -> dict[str, str]:
+    """Backfill requirements.txt when Stage 12 would auto-generate it anyway."""
+    selected = benchmark_plan.get("selected_benchmarks", [])
+    if not isinstance(selected, list):
+        return files
+    has_tier2 = any(
+        isinstance(item, dict) and int(item.get("tier", 1)) >= 2
+        for item in selected
+    )
+    if not has_tier2:
+        return files
+    if _effective_network_policy(config) in {"none", "pip_only"}:
+        return files
+    existing_requirements = str(files.get("requirements.txt", "") or "")
+    explicit = str(benchmark_plan.get("requirements") or "").strip()
+    detected = _detect_required_pip_packages(files)
+    lines: list[str] = []
+    if existing_requirements.strip():
+        lines.extend(
+            line.strip()
+            for line in existing_requirements.splitlines()
+            if line.strip()
+        )
+    if explicit:
+        lines.extend(
+            line.strip()
+            for line in explicit.splitlines()
+            if line.strip()
+        )
+    for pkg in detected:
+        if pkg not in lines:
+            lines.append(pkg)
+    lines = _sanitize_requirement_entries(lines)
+    if not lines:
+        if existing_requirements.strip():
+            updated = dict(files)
+            updated.pop("requirements.txt", None)
+            logger.info("Stage 10: removed invalid synthesized requirements.txt")
+            return updated
+        return files
+
+    updated = dict(files)
+    updated["requirements.txt"] = "\n".join(lines) + "\n"
+    logger.info(
+        "Stage 10: synthesized requirements.txt with %d package(s): %s",
+        len(lines),
+        lines,
+    )
+    return updated
+
+
+def _maybe_add_setup_file(
+    files: dict[str, str],
+    benchmark_plan: dict[str, Any],
+    config: RCConfig,
+    *,
+    previous_files: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Ensure Tier 2 dataset plans retain a runnable setup.py.
+
+    Alignment regeneration often returns only the core Python files and drops
+    support files such as setup.py. When that happens we preserve the previous
+    setup.py or synthesize a minimal writable-cache variant.
+    """
+    selected = benchmark_plan.get("selected_benchmarks", [])
+    if not isinstance(selected, list):
+        return files
+    tier2 = [
+        item for item in selected
+        if isinstance(item, dict) and int(item.get("tier", 1)) >= 2
+    ]
+    if not tier2:
+        return files
+    if _effective_network_policy(config) in {"none", "pip_only"}:
+        return files
+    if str(files.get("setup.py", "")).strip():
+        return files
+
+    if previous_files:
+        prior_setup = str(previous_files.get("setup.py", "") or "").strip()
+        if prior_setup:
+            updated = dict(files)
+            updated["setup.py"] = prior_setup + ("\n" if not prior_setup.endswith("\n") else "")
+            logger.info("Stage 10: restored setup.py from previous file set")
+            return updated
+
+    updated = dict(files)
+    updated["setup.py"] = (
+        '"""Prepare writable cache directories for Tier 2 datasets."""\n\n'
+        "import os\n\n"
+        'DATA_DIR = "/workspace/data"\n'
+        'HF_CACHE = os.path.join(DATA_DIR, "hf")\n'
+        'HF_HOME = os.path.join(DATA_DIR, "hf_home")\n'
+        'TRANSFORMERS_CACHE = os.path.join(HF_HOME, "transformers")\n'
+        'HF_ASSETS_CACHE = os.path.join(HF_HOME, "assets")\n'
+        'XDG_CACHE_HOME = os.path.join(DATA_DIR, "xdg_cache")\n\n'
+        "def main() -> None:\n"
+        "    for path in [DATA_DIR, HF_CACHE, HF_HOME, TRANSFORMERS_CACHE, HF_ASSETS_CACHE, XDG_CACHE_HOME]:\n"
+        "        os.makedirs(path, exist_ok=True)\n"
+        '    os.environ["HOME"] = DATA_DIR\n'
+        '    os.environ["HF_HOME"] = HF_HOME\n'
+        '    os.environ["HF_DATASETS_CACHE"] = HF_CACHE\n'
+        '    os.environ["TRANSFORMERS_CACHE"] = TRANSFORMERS_CACHE\n'
+        '    os.environ["HF_ASSETS_CACHE"] = HF_ASSETS_CACHE\n'
+        '    os.environ["XDG_CACHE_HOME"] = XDG_CACHE_HOME\n'
+        '    print("[setup] prepared writable dataset/cache roots")\n\n'
+        'if __name__ == "__main__":\n'
+        "    main()\n"
+    )
+    logger.info("Stage 10: synthesized fallback setup.py for Tier 2 datasets")
+    return updated
+
+
+def _tier2_dataset_errors(
+    files: dict[str, str],
+    benchmark_plan: dict[str, Any],
+    config: RCConfig,
+) -> list[str]:
+    selected = benchmark_plan.get("selected_benchmarks", [])
+    if not isinstance(selected, list):
+        return []
+    tier2 = [
+        item for item in selected
+        if isinstance(item, dict) and int(item.get("tier", 1)) >= 2
+    ]
+    if not tier2:
+        return []
+
+    names = [str(item.get("name", "unknown")) for item in tier2]
+    policy = _effective_network_policy(config)
+    mode = str(config.experiment.mode)
+    errors: list[str] = []
+
+    if policy in {"none", "pip_only"}:
+        errors.append(
+            "Benchmark plan selected Tier 2 downloadable datasets "
+            f"{names}, but mode={mode} uses network_policy={policy}. "
+            "These datasets are not reachable in this runtime."
+        )
+        return errors
+
+    setup_code = files.get("setup.py", "")
+    if not setup_code.strip():
+        errors.append(
+            "Tier 2 datasets were selected but setup.py is missing. "
+            f"Required for dataset preparation: {names}."
+        )
+    requirements_text = files.get("requirements.txt", "")
+    benchmark_requirements = str(benchmark_plan.get("requirements") or "").strip()
+    detected_packages = _detect_required_pip_packages(files)
+    if (benchmark_requirements or detected_packages) and not requirements_text.strip():
+        errors.append(
+            "Tier 2 dataset pipeline requires requirements.txt, but it was not generated."
+        )
+    return errors
+
+
+def _collect_final_project_errors(
+    files: dict[str, str],
+    *,
+    benchmark_plan: dict[str, Any] | None = None,
+    config: RCConfig | None = None,
+) -> list[str]:
+    """Validate the final project snapshot before declaring Stage 10 done."""
+    errors: list[str] = []
+    if not files:
+        return ["No generated files were produced."]
+    if "main.py" not in files:
+        errors.append("Missing required entry point file: main.py")
+        return errors
+    main_code = files.get("main.py", "")
+    if not main_code.strip():
+        errors.append("main.py is empty.")
+        return errors
+    for fname, code in sorted(files.items()):
+        upstream_error = detect_non_code_response(code)
+        if upstream_error:
+            errors.append(f"{fname}: {upstream_error}")
+            continue
+        if not fname.endswith(".py"):
+            continue
+        validation = validate_code(code)
+        if not validation.ok:
+            errors.append(f"{fname}: {validation.summary()}")
+    if benchmark_plan is not None and config is not None:
+        errors.extend(_tier2_dataset_errors(files, benchmark_plan, config))
+    return errors
+
+
 def _execute_code_generation(
     stage_dir: Path,
     run_dir: Path,
@@ -74,10 +645,16 @@ def _execute_code_generation(
     prompts: PromptManager | None = None,
 ) -> StageResult:
     exp_plan = _read_prior_artifact(run_dir, "exp_plan.yaml") or ""
+    compact_exp_plan = _build_experiment_plan_summary(
+        exp_plan,
+        run_dir=run_dir,
+        max_chars=4700,
+    )
     metric = config.experiment.metric_key
     max_repair = 5  # BUG-14: Increased from 3 to give more chances for critical bugs
     files: dict[str, str] = {}
     validation_log: list[str] = []
+    benchmark_plan_data = _load_benchmark_plan(run_dir)
 
     # --- Detect available packages for sandbox ---
     _pm = prompts or PromptManager()
@@ -141,7 +718,7 @@ def _execute_code_generation(
             f"\n## Compute Budget Constraint\n"
             f"- Total execution time limit: {time_budget_sec} seconds\n"
             f"- Design experiments that complete within this budget\n"
-            f"- Implement a time guard: stop gracefully at 80% of budget\n"
+            f"- Checkpoint after every seed/condition; do not stop at 80% of budget\n"
         )
 
     # --- Dataset guidance + setup script + HP reporting (docker/sandbox modes) ---
@@ -187,24 +764,16 @@ def _execute_code_generation(
             pass
 
     # --- BA: Inject BenchmarkAgent plan from Stage 9 ---
-    _bp_path = None
-    for _s9_dir in sorted(run_dir.glob("stage-09*"), reverse=True):
-        _candidate = _s9_dir / "benchmark_plan.json"
-        if _candidate.exists():
-            _bp_path = _candidate
-            break
-    if _bp_path is not None:
+    if benchmark_plan_data:
         try:
-            import json as _json_bp
-            _bp_data = _json_bp.loads(_bp_path.read_text(encoding="utf-8"))
             # Reconstruct the prompt block
             from researchclaw.agents.benchmark_agent.orchestrator import BenchmarkPlan
             _bp = BenchmarkPlan(
-                selected_benchmarks=_bp_data.get("selected_benchmarks", []),
-                selected_baselines=_bp_data.get("selected_baselines", []),
-                data_loader_code=_bp_data.get("data_loader_code", ""),
-                baseline_code=_bp_data.get("baseline_code", ""),
-                experiment_notes=_bp_data.get("experiment_notes", ""),
+                selected_benchmarks=benchmark_plan_data.get("selected_benchmarks", []),
+                selected_baselines=benchmark_plan_data.get("selected_baselines", []),
+                data_loader_code=benchmark_plan_data.get("data_loader_code", ""),
+                baseline_code=benchmark_plan_data.get("baseline_code", ""),
+                experiment_notes=benchmark_plan_data.get("experiment_notes", ""),
             )
             _bp_block = _bp.to_prompt_block()
             if _bp_block:
@@ -255,7 +824,7 @@ def _execute_code_generation(
             config.research.topic, _hypothesis_text, exp_plan or ""
         )
         if _fw_ids:
-            _fw_docs = load_framework_docs(_fw_ids, max_chars=8000)
+            _fw_docs = load_framework_docs(_fw_ids, max_chars=2500)
             if _fw_docs:
                 extra_guidance += _fw_docs
                 logger.info("F-01: Injected framework docs for: %s", _fw_ids)
@@ -318,136 +887,22 @@ def _execute_code_generation(
         "sklearn, pandas) unless deep learning is inherent to the topic.\n"
         "- The experiment MUST be self-contained and runnable without GPU.\n"
     )
+    prompt_instruction_bundle = _compress_instruction_block(
+        pkg_hint + "\n" + compute_budget + "\n" + extra_guidance,
+        max_chars=5200,
+    )
 
-    # --- Code generation: Beast Mode → CodeAgent → Legacy single-shot ---
+    # --- Code generation: CodeAgent → Legacy single-shot ---
     _code_agent_active = False
-    _beast_mode_used = False
     _code_max_tokens = 8192
 
-    # ── Beast Mode: OpenCode external agent (optional) ─────────────────
-    _oc_cfg = config.experiment.opencode
-    if _oc_cfg.enabled:
-        from researchclaw.pipeline.opencode_bridge import (
-            OpenCodeBridge,
-            OpenCodeResult,
-            count_historical_failures,
-            score_complexity,
-        )
-
-        _hist_failures = count_historical_failures(run_dir)
-        _cplx = score_complexity(
-            exp_plan=exp_plan,
-            topic=config.research.topic,
-            historical_failures=_hist_failures,
-            threshold=_oc_cfg.complexity_threshold,
-        )
-
-        # Persist complexity analysis
-        (stage_dir / "complexity_analysis.json").write_text(
-            json.dumps(
-                {
-                    "score": _cplx.score,
-                    "signals": _cplx.signals,
-                    "recommendation": _cplx.recommendation,
-                    "reason": _cplx.reason,
-                    "threshold": _oc_cfg.complexity_threshold,
-                    "historical_failures": _hist_failures,
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-
-        if _cplx.recommendation == "beast_mode":
-            _proceed = _oc_cfg.auto
-            if not _proceed:
-                # Non-auto mode: check for HITL adapter
-                if adapters.hitl is not None:
-                    try:
-                        _proceed = adapters.hitl.confirm(
-                            f"Beast Mode: complexity={_cplx.score:.2f} "
-                            f"(threshold={_oc_cfg.complexity_threshold}). "
-                            f"Route to OpenCode?"
-                        )
-                    except Exception:  # noqa: BLE001
-                        logger.info(
-                            "Beast mode: HITL adapter unavailable, skipping "
-                            "(set opencode.auto=true for non-interactive runs)"
-                        )
-                else:
-                    logger.info(
-                        "Beast mode: no HITL adapter, skipping "
-                        "(set opencode.auto=true for non-interactive runs)"
-                    )
-
-            if _proceed:
-                _oc_model = _oc_cfg.model or config.llm.primary_model
-                _bridge = OpenCodeBridge(
-                    model=_oc_model,
-                    llm_base_url=config.llm.base_url,
-                    api_key_env=config.llm.api_key_env,
-                    llm_provider=config.llm.provider,
-                    timeout_sec=_oc_cfg.timeout_sec,
-                    max_retries=_oc_cfg.max_retries,
-                    workspace_cleanup=_oc_cfg.workspace_cleanup,
-                )
-
-                logger.info(
-                    "Beast mode: ENGAGED (complexity=%.2f, model=%s)",
-                    _cplx.score,
-                    _oc_model,
-                )
-
-                _oc_result: OpenCodeResult = _bridge.generate(
-                    stage_dir=stage_dir,
-                    topic=config.research.topic,
-                    exp_plan=exp_plan,
-                    metric=metric,
-                    pkg_hint=pkg_hint + "\n" + compute_budget,
-                    extra_guidance=extra_guidance,
-                    time_budget_sec=config.experiment.time_budget_sec,
-                )
-
-                # Persist beast mode log
-                (stage_dir / "beast_mode_log.json").write_text(
-                    json.dumps(
-                        {
-                            "success": _oc_result.success,
-                            "elapsed_sec": _oc_result.elapsed_sec,
-                            "files": list(_oc_result.files.keys()),
-                            "error": _oc_result.error,
-                            "complexity_score": _cplx.score,
-                            "model": _oc_model,
-                        },
-                        indent=2,
-                    ),
-                    encoding="utf-8",
-                )
-
-                if _oc_result.success and _oc_result.files:
-                    files = _oc_result.files
-                    _beast_mode_used = True
-                    _code_agent_active = True  # skip legacy path
-                    logger.info(
-                        "Beast mode: SUCCESS — %d files in %.1fs",
-                        len(files),
-                        _oc_result.elapsed_sec,
-                    )
-                else:
-                    logger.warning(
-                        "Beast mode: FAILED (%s) — falling back to CodeAgent",
-                        _oc_result.error or "unknown error",
-                    )
-        else:
-            logger.info(
-                "Beast mode: complexity=%.2f (threshold=%.2f), not triggered",
-                _cplx.score,
-                _oc_cfg.complexity_threshold,
-            )
-
-    if not _beast_mode_used and config.experiment.code_agent.enabled and llm is not None:
+    if config.experiment.code_agent.enabled and llm is not None:
         # ── F-02: Advanced Code Agent path ────────────────────────────────
         from researchclaw.pipeline.code_agent import CodeAgent as _CodeAgent
+        from researchclaw.pipeline.runner import stop_requested as _stop_requested
+        from researchclaw.pipeline.stage_impls._execution import (
+            _sandbox_wait_notifier,
+        )
 
         _ca_cfg = config.experiment.code_agent
         # Ensure we have a proper config object
@@ -512,12 +967,20 @@ def _execute_code_generation(
             experiment_config=config.experiment,
             domain_profile=_domain_profile,
             code_search_result=_code_search_result,
+            sandbox_notify_callback=_sandbox_wait_notifier(
+                run_dir=run_dir,
+                adapters=adapters,
+                config=config,
+                run_id=run_dir.name,
+                stage=Stage.CODE_GENERATION,
+            ),
+            sandbox_stop_requested=lambda: _stop_requested(run_dir),
         )
         _agent_result = _agent.generate(
             topic=config.research.topic,
-            exp_plan=exp_plan,
+            exp_plan=compact_exp_plan or exp_plan,
             metric=metric,
-            pkg_hint=pkg_hint + "\n" + compute_budget + "\n" + extra_guidance,
+            pkg_hint=prompt_instruction_bundle,
             max_tokens=_code_max_tokens,
         )
         files = _agent_result.files
@@ -562,8 +1025,8 @@ def _execute_code_generation(
             evolution_overlay=_overlay,
             topic=topic,
             metric=metric,
-            pkg_hint=pkg_hint + "\n" + compute_budget + "\n" + extra_guidance,
-            exp_plan=exp_plan,
+            pkg_hint=prompt_instruction_bundle,
+            exp_plan=compact_exp_plan or exp_plan,
             metric_direction_hint=_md_hint,
         )
         # R13-3: Use higher max_tokens for reasoning models (they consume tokens
@@ -664,8 +1127,9 @@ def _execute_code_generation(
                 max_repair,
                 validation.summary(),
             )
-            all_files_ctx = "\n\n".join(
-                f"```filename:{f}\n{c}\n```" for f, c in files.items()
+            all_files_ctx = _compact_project_context_for_repair(
+                files,
+                focus_file=fname,
             )
             rp = _pm.sub_prompt(
                 "code_repair",
@@ -675,8 +1139,18 @@ def _execute_code_generation(
             )
             resp = _chat_with_prompt(llm, rp.system, rp.user)
             _repaired = _extract_code_block(resp.content)
-            if _repaired.strip():
+            upstream_error = detect_non_code_response(_repaired)
+            if _repaired.strip() and not upstream_error:
                 files[fname] = _repaired
+            elif upstream_error:
+                logger.warning(
+                    "Repair attempt for %s returned non-code text; keeping prior file: %s",
+                    fname,
+                    upstream_error,
+                )
+                validation_log.append(
+                    f"File {fname} attempt {repair_attempt}: upstream non-code response ignored"
+                )
             else:
                 logger.warning("Repair attempt returned empty code, keeping original")
             validation = validate_code(files[fname])
@@ -736,7 +1210,7 @@ def _execute_code_generation(
         f.replace(".py", "") for f in files if f.endswith(".py")
     }
     _stdlib_and_common = {
-        "os", "sys", "json", "math", "time", "copy", "re", "random",
+        "os", "sys", "json", "math", "time", "copy", "re", "random", "hashlib", "importlib",
         "pathlib", "argparse", "logging", "collections", "functools",
         "itertools", "abc", "typing", "dataclasses", "enum", "io",
         "csv", "pickle", "glob", "shutil", "subprocess", "datetime",
@@ -763,9 +1237,7 @@ def _execute_code_generation(
 
     # --- Write experiment directory ---
     exp_dir = stage_dir / "experiment"
-    exp_dir.mkdir(parents=True, exist_ok=True)
-    for fname, code in files.items():
-        (exp_dir / fname).write_text(code, encoding="utf-8")
+    _sync_experiment_dir(exp_dir, files)
 
     # --- Write validation report ---
     if validation_log or not all_valid:
@@ -796,7 +1268,7 @@ def _execute_code_generation(
             fixed_code, n_fixes = auto_fix_unbound_locals(code)
             if n_fixes > 0:
                 files[fname] = fixed_code
-                (exp_dir / fname).write_text(fixed_code, encoding="utf-8")
+                _sync_experiment_dir(exp_dir, files)
                 _total_ub_fixes += n_fixes
                 logger.info(
                     "Stage 10: auto-fixed %d UnboundLocalError risk(s) in %s",
@@ -836,72 +1308,114 @@ def _execute_code_generation(
             "Stage 10: %d critical code issues found — triggering repair cycle",
             len(critical_deep),
         )
-        repair_issues = "\n".join(f"- {w}" for w in critical_deep)
-        all_code_ctx = "\n\n".join(
-            f"```filename:{f}\n{c}\n```" for f, c in files.items()
-        )
-        repair_prompt = (
-            f"CRITICAL CODE QUALITY ISSUES FOUND:\n{repair_issues}\n\n"
-            f"Fix ALL these issues in the code below. Return the complete "
-            f"corrected files using ```filename:xxx.py format.\n\n"
-            f"RULES:\n"
-            f"- nn.Linear/nn.Conv must be created in __init__(), not forward()\n"
-            f"- Variables used after if/else must be defined before the branch\n"
-            f"- Use scipy.special.erf, not np.erf\n"
-            f"- Ablation/variant classes must have genuinely different logic\n"
-            f"- Every class must have a real implementation, not just `pass`\n"
-            f"- Ablation classes MUST override the parent method that implements "
-            f"the component being ablated (e.g., if ablating attention, override "
-            f"the attention method with a simpler alternative like mean pooling)\n"
-            f"- IMPORT CONSISTENCY: if you write `from X import Y`, call `Y()` "
-            f"directly — NOT `X.Y()`. Mixing styles causes NameError.\n"
-            f"- NumPy 2.0: ndarray.ptp() was removed — use arr.max()-arr.min()\n"
-            f"- NumPy 2.0: np.bool/np.int/np.float removed — use builtins\n"
-            f"- Pretrained models (EfficientNet, ResNet, ViT) expect 224×224 input "
-            f"— add `transforms.Resize(224)` when using CIFAR (32×32) or similar\n"
-            f"- Copy-paste ablation: if two classes have identical bodies, REWRITE "
-            f"the ablation to genuinely remove/reduce a component (e.g., zero out "
-            f"attention weights, halve hidden dimensions, remove a loss term)\n"
-            f"- KD: teacher must be frozen, add projection layers if teacher_dim != "
-            f"student_dim, use temperature T=4 for soft targets\n"
-            f"- FILENAME COLLISIONS: If a file like config.py shadows a pip/stdlib "
-            f"package, rename it (e.g., config.py → experiment_config.py) and update "
-            f"ALL imports referencing it\n\n"
-            f"Current code:\n{all_code_ctx}\n"
-        )
-        try:
-            repair_resp = _chat_with_prompt(
-                llm,
-                _pm.system("code_generation"),
-                repair_prompt,
-                max_tokens=_code_max_tokens,
+        before_auto_repairable = _auto_repairable_issue_set(critical_deep)
+        repairable_issues = [
+            issue for issue in critical_deep
+            if _is_auto_repairable_deep_issue(issue)
+        ]
+        deferred_issues = [
+            issue for issue in critical_deep
+            if not _is_auto_repairable_deep_issue(issue)
+        ]
+        if deferred_issues:
+            for issue in deferred_issues:
+                logger.warning(
+                    "Stage 10: deferred high-cost deep issue (manual/structural): %s",
+                    issue,
+                )
+            complexity_warnings.append(
+                "[REPAIR] Deferred high-cost deep issues: "
+                + "; ".join(deferred_issues[:3])
             )
-            repaired = _extract_multi_file_blocks(repair_resp.content)
-            if repaired and "main.py" in repaired:
-                files = repaired
-                for fname, code in files.items():
-                    (exp_dir / fname).write_text(code, encoding="utf-8")
-                # Re-check after repair
+
+        issues_by_file = _group_deep_issues_by_file(files, repairable_issues)
+        repaired_any = False
+        fixed_total = 0
+        try:
+            for focus_file, file_issues in sorted(issues_by_file.items()):
+                if focus_file not in files:
+                    continue
+                prior_code = files[focus_file]
+                before_file_issues = _file_issue_set(files, focus_file)
+                repair_prompt = (
+                    "CRITICAL CODE QUALITY ISSUES FOUND FOR ONE FILE.\n\n"
+                    f"## Target file\n{focus_file}\n\n"
+                    "## Issues\n"
+                    + "\n".join(f"- {w}" for w in file_issues)
+                    + "\n\n## Rules\n"
+                    "- Fix only the target file.\n"
+                    "- Preserve public names and imports used by other files.\n"
+                    "- nn.Linear/nn.Conv must be created in __init__(), not forward().\n"
+                    "- Variables used after if/else must be defined before the branch.\n"
+                    "- Use scipy.special.erf, not np.erf.\n"
+                    "- Ablation/variant classes must have genuinely different logic.\n"
+                    "- If two condition classes are copy-paste variants, rewrite the "
+                    "target condition logic so outputs differ on the same input for a "
+                    "meaningful algorithmic reason.\n"
+                    "- Modify only the relevant classes/functions or the smallest "
+                    "necessary code block in the target file.\n"
+                    "- Preserve all unrelated code byte-for-byte where possible.\n"
+                    "- Output ONLY the corrected target file in "
+                    f"```filename:{focus_file}``` format.\n\n"
+                    "## Project context\n"
+                    + _build_symbol_repair_context(
+                        files,
+                        focus_file=focus_file,
+                        issues=file_issues,
+                    )
+                )
+                repair_resp = _chat_with_prompt(
+                    llm,
+                    _pm.system("code_generation"),
+                    repair_prompt,
+                    max_tokens=min(_code_max_tokens, 12288),
+                )
+                repaired = _extract_multi_file_blocks(repair_resp.content)
+                if focus_file not in repaired:
+                    single = _extract_single_named_file(repair_resp.content, focus_file)
+                    if single:
+                        repaired = {focus_file: single}
+                if focus_file not in repaired:
+                    logger.warning(
+                        "Stage 10: deep repair produced no extractable %s",
+                        focus_file,
+                    )
+                    continue
+                candidate_files = dict(files)
+                candidate_files[focus_file] = repaired[focus_file]
+                candidate_validation = validate_code(candidate_files[focus_file])
+                if not candidate_validation.ok:
+                    logger.warning(
+                        "Stage 10: rejected deep repair for %s due to validation failure: %s",
+                        focus_file,
+                        candidate_validation.summary(),
+                    )
+                    continue
+                after_file_issues = _file_issue_set(candidate_files, focus_file)
+                if len(after_file_issues) >= len(before_file_issues):
+                    logger.warning(
+                        "Stage 10: rejected deep repair for %s because issues did not improve "
+                        "(before=%d, after=%d)",
+                        focus_file,
+                        len(before_file_issues),
+                        len(after_file_issues),
+                    )
+                    continue
+                files[focus_file] = repaired[focus_file]
+                _sync_experiment_dir(exp_dir, files)
+                repaired_any = repaired_any or files[focus_file] != prior_code
+
+            if repaired_any:
                 deep_warnings_after = deep_validate_files(files)
-                fixed = len(critical_deep) - len([
-                    w for w in deep_warnings_after
-                    if any(kw in w for kw in (
-                        "UnboundLocalError", "unregistered", "does not exist",
-                        "empty or trivial subclass", "does NOT override",
-                        "Import-usage mismatch", "NameError",
-                        "was removed", "ptp()",
-                        "copy-paste", "identical method signatures",
-                        "identical AST", "NOT a real ablation",
-                        "shadows stdlib/pip",
-                    ))
-                ])
+                after_auto_repairable = _auto_repairable_issue_set(deep_warnings_after)
+                fixed_total = len(before_auto_repairable - after_auto_repairable)
                 logger.info(
-                    "Stage 10: Deep repair fixed %d/%d critical issues",
-                    fixed, len(critical_deep),
+                    "Stage 10: Deep repair fixed %d/%d auto-repairable critical issues",
+                    fixed_total, len(repairable_issues),
                 )
                 complexity_warnings.append(
-                    f"[REPAIR] Deep repair fixed {fixed}/{len(critical_deep)} "
-                    f"critical issues"
+                    f"[REPAIR] Deep repair fixed {fixed_total}/{len(repairable_issues)} "
+                    "auto-repairable critical issues"
                 )
         except Exception as exc:
             logger.debug("Deep repair failed: %s", exc)
@@ -925,7 +1439,7 @@ def _execute_code_generation(
             f"You are a senior researcher reviewing experiment code for a "
             f"research submission.\n\n"
             f"TOPIC: {config.research.topic}\n"
-            f"EXPERIMENT PLAN:\n{exp_plan[:3000]}\n\n"
+            f"EXPERIMENT PLAN:\n{(compact_exp_plan or exp_plan)[:4500]}\n\n"
             f"CODE:\n```python\n{all_code_review}\n```\n\n"
             f"Review the code and return JSON with this EXACT structure:\n"
             f'{{"score": <1-10>, "issues": ['
@@ -1015,8 +1529,7 @@ def _execute_code_generation(
                         fixed_files = _extract_multi_file_blocks(fix_resp.content)
                         if fixed_files and "main.py" in fixed_files:
                             files = fixed_files
-                            for fname, code in files.items():
-                                (exp_dir / fname).write_text(code, encoding="utf-8")
+                            _sync_experiment_dir(exp_dir, files)
                             logger.info(
                                 "Stage 10: Code fixed after review "
                                 "(was %d/10, %d critical issues)",
@@ -1159,8 +1672,8 @@ def _execute_code_generation(
                         f"- Use ONLY lightweight CPU-friendly libraries (numpy, scipy, "
                         f"sklearn) unless the topic EXPLICITLY requires deep learning.\n"
                         f"- The experiment must be self-contained and runnable without GPU.\n\n"
-                        f"{pkg_hint}\n{compute_budget}\n"
-                        f"PLAN:\n{exp_plan}\n\n"
+                        f"{prompt_instruction_bundle}\n"
+                        f"PLAN:\n{compact_exp_plan or exp_plan}\n\n"
                         f"Return multiple files using ```filename:xxx.py format."
                     )
                     regen_resp = _chat_with_prompt(
@@ -1176,9 +1689,20 @@ def _execute_code_generation(
                             _regen_attempt,
                         )
                         continue
+                    _previous_files = dict(files)
+                    regen_files = _maybe_add_setup_file(
+                        regen_files,
+                        benchmark_plan_data,
+                        config,
+                        previous_files=_previous_files,
+                    )
+                    regen_files = _maybe_add_requirements_file(
+                        regen_files,
+                        benchmark_plan_data,
+                        config,
+                    )
                     files = regen_files
-                    for fname, code in files.items():
-                        (exp_dir / fname).write_text(code, encoding="utf-8")
+                    _sync_experiment_dir(exp_dir, files)
                     # Re-check alignment on regenerated code (BUG-171 fix)
                     _rc_inv = []
                     for _fn, _cd in files.items():
@@ -1260,8 +1784,8 @@ def _execute_code_generation(
                     json.dumps(abl_data, indent=2), encoding="utf-8"
                 )
                 # --- Attempt ablation repair ---
-                all_code_ctx = "\n\n".join(
-                    f"```filename:{f}\n{c}\n```" for f, c in files.items()
+                focus_file = _infer_issue_file_from_symbols(files, str(dup_details)) or (
+                    "methods.py" if "methods.py" in files else "main.py"
                 )
                 dup_details = abl_data.get("details", "unknown")
                 abl_repair_prompt = (
@@ -1276,8 +1800,12 @@ def _execute_code_generation(
                     f"same input. Add a startup assertion that runs one forward pass "
                     f"per condition on identical input and prints:\n"
                     f"  ABLATION_CHECK: <cond1> vs <cond2> outputs_differ=True\n\n"
-                    f"Return ALL files using ```filename:xxx.py format.\n\n"
-                    f"Current code:\n{all_code_ctx}\n"
+                    f"Fix only the target file `{focus_file}` unless another file "
+                    f"is strictly required for import compatibility.\n"
+                    f"Output the corrected `{focus_file}` using "
+                    f"```filename:{focus_file}``` format.\n\n"
+                    "Current code:\n"
+                    f"{_compact_project_context_for_repair(files, focus_file=focus_file)}\n"
                 )
                 try:
                     abl_repair_resp = _chat_with_prompt(
@@ -1286,21 +1814,58 @@ def _execute_code_generation(
                         abl_repair_prompt,
                         max_tokens=_code_max_tokens,
                     )
-                    repaired_files = _extract_multi_file_blocks(
-                        abl_repair_resp.content
-                    )
-                    if repaired_files and "main.py" in repaired_files:
-                        files = repaired_files
-                        for fname, code in files.items():
-                            (exp_dir / fname).write_text(code, encoding="utf-8")
+                    repaired_files = _extract_multi_file_blocks(abl_repair_resp.content)
+                    if focus_file not in repaired_files:
+                        single = _extract_single_named_file(abl_repair_resp.content, focus_file)
+                        if single:
+                            repaired_files = {focus_file: single}
+                    if repaired_files and focus_file in repaired_files:
+                        files[focus_file] = repaired_files[focus_file]
+                        _sync_experiment_dir(exp_dir, files)
                         logger.info(
                             "Stage 10: Ablation repair applied — "
-                            "rewrote duplicate conditions"
+                            "rewrote duplicate conditions in %s",
+                            focus_file,
                         )
                 except Exception as exc:
                     logger.debug("Ablation repair failed: %s", exc)
         except Exception as exc:
             logger.debug("Ablation validation skipped: %s", exc)
+
+    # --- Final project validation + final sync ---
+    files = _maybe_add_setup_file(
+        files,
+        benchmark_plan_data,
+        config,
+    )
+    files = _maybe_add_requirements_file(files, benchmark_plan_data, config)
+    _sync_experiment_dir(exp_dir, files)
+    final_project_errors = _collect_final_project_errors(
+        files,
+        benchmark_plan=benchmark_plan_data,
+        config=config,
+    )
+    if final_project_errors:
+        logger.error(
+            "Stage 10: final project snapshot is invalid: %s",
+            "; ".join(final_project_errors),
+        )
+        report_path = stage_dir / "validation_report.md"
+        report_body = [
+            "# Code Validation Report",
+            "",
+            "**Status**: BLOCKED — final project snapshot is invalid",
+            "",
+        ]
+        report_body.extend(f"- {item}" for item in final_project_errors)
+        report_path.write_text("\n".join(report_body), encoding="utf-8")
+        return StageResult(
+            stage=Stage.CODE_GENERATION,
+            status=StageStatus.FAILED,
+            artifacts=("experiment/", "validation_report.md"),
+            evidence_refs=("stage-10/experiment/", "stage-10/validation_report.md"),
+            error="Final generated project is not executable.",
+        )
 
     # --- Write spec ---
     file_list = ", ".join(f"`{f}`" for f in sorted(files.keys()))
@@ -1335,7 +1900,56 @@ Multi-file experiment project with {len(files)} file(s): {file_list}
 """
     (stage_dir / "experiment_spec.md").write_text(spec, encoding="utf-8")
 
-    artifacts = ["experiment/", "experiment_spec.md"]
+    file_manifest = []
+    for fname, content in sorted(files.items()):
+        file_manifest.append(
+            {
+                "path": fname,
+                "size_bytes": len(content.encode("utf-8")),
+                "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            }
+        )
+    experiment_contract = {
+        "schema_version": 1,
+        "generated": _utcnow_iso(),
+        "topic": config.research.topic,
+        "entry_point": "main.py",
+        "primary_metric": metric,
+        "metric_direction": config.experiment.metric_direction,
+        "time_budget_sec": config.experiment.time_budget_sec,
+        "execution_mode": config.experiment.mode,
+        "network_policy": (
+            config.experiment.docker.network_policy
+            if config.experiment.mode == "docker"
+            else "none"
+        ),
+        "requires_setup_phase": "setup.py" in files,
+        "requires_requirements_phase": "requirements.txt" in files,
+        "output_files": ["results.json"],
+        "supported_gpu_policy": "up_to_two_idle_gpus",
+        "file_manifest": file_manifest,
+    }
+    (stage_dir / "experiment_contract.json").write_text(
+        json.dumps(experiment_contract, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (stage_dir / "experiment_contract.meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact": "experiment_contract.json",
+                "sha256": hashlib.sha256(
+                    json.dumps(experiment_contract, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                ).hexdigest(),
+                "generated": _utcnow_iso(),
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    artifacts = ["experiment/", "experiment_spec.md", "experiment_contract.json", "experiment_contract.meta.json"]
     if (stage_dir / "validation_report.md").exists():
         artifacts.append("validation_report.md")
 
@@ -1361,4 +1975,3 @@ Multi-file experiment project with {len(files)} file(s): {file_list}
         artifacts=tuple(artifacts),
         evidence_refs=tuple(f"stage-10/{a}" for a in artifacts),
     )
-

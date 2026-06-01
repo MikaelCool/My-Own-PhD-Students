@@ -516,6 +516,13 @@ def check_experiment_mode(mode: str) -> CheckResult:
 def check_acp_agent(agent_command: str) -> CheckResult:
     """Check that the ACP agent CLI is available on PATH."""
     resolved = shutil.which(agent_command)
+    if not resolved and agent_command in {"codex", "claude"}:
+        try:
+            from researchclaw.llm.acp_client import _resolve_agent_binary
+
+            resolved = _resolve_agent_binary(agent_command)
+        except Exception:  # noqa: BLE001
+            resolved = None
     if resolved:
         return CheckResult(
             name="acp_agent",

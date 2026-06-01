@@ -279,6 +279,17 @@ def test_rcconfig_from_dict_parses_llm_wire_api(tmp_path: Path):
     assert config.llm.wire_api == "responses"
 
 
+def test_rcconfig_from_dict_parses_docker_shared_cache_root(tmp_path: Path):
+    data = _valid_config_data()
+    data.setdefault("experiment", {})["docker"] = {
+        "shared_cache_root": "/data2/lyc/researchclaw_cache",
+    }
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.experiment.docker.shared_cache_root == "/data2/lyc/researchclaw_cache"
+
+
 def test_rcconfig_from_dict_missing_fields_raises_value_error(tmp_path: Path):
     data = _valid_config_data()
     del data["runtime"]

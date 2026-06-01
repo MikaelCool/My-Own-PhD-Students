@@ -839,6 +839,107 @@ class TestOrchestrator:
         files = plan.get_chart_files()
         assert files == ["fig_main.png", "fig_ablation.png"]
 
+    def test_failed_final_render_does_not_count_prior_unapproved_figures_as_passed(
+        self, tmp_path, monkeypatch
+    ):
+        from researchclaw.agents.base import AgentStepResult
+        from researchclaw.agents.figure_agent.orchestrator import (
+            FigureAgentConfig,
+            FigureOrchestrator,
+        )
+
+        cfg = FigureAgentConfig(
+            min_figures=1,
+            max_figures=1,
+            max_iterations=2,
+            render_timeout_sec=10,
+        )
+        orch = FigureOrchestrator(_FakeLLM(), cfg, stage_dir=tmp_path)
+
+        monkeypatch.setattr(
+            orch._decision,
+            "execute",
+            lambda context: AgentStepResult(
+                True,
+                data={"code_figures": [{"figure_id": "fig_main"}], "image_figures": []},
+            ),
+        )
+        monkeypatch.setattr(
+            orch._planner,
+            "execute",
+            lambda context: AgentStepResult(
+                True,
+                data={"figures": [{"figure_id": "fig_main"}]},
+            ),
+        )
+        monkeypatch.setattr(
+            orch._codegen,
+            "execute",
+            lambda context: AgentStepResult(
+                True,
+                data={"scripts": [{"figure_id": "fig_main", "script": "print('x')"}]},
+            ),
+        )
+
+        render_calls = iter(
+            [
+                AgentStepResult(
+                    True,
+                    data={
+                        "rendered": [
+                            {
+                                "figure_id": "fig_main",
+                                "success": True,
+                                "output_path": str(tmp_path / "fig_main.png"),
+                            }
+                        ]
+                    },
+                ),
+                AgentStepResult(False, error="All renders failed"),
+            ]
+        )
+        monkeypatch.setattr(orch._renderer, "execute", lambda context: next(render_calls))
+        monkeypatch.setattr(
+            orch._critic,
+            "execute",
+            lambda context: AgentStepResult(
+                True,
+                data={
+                    "reviews": [{"figure_id": "fig_main", "passed": False}],
+                    "all_passed": False,
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            orch._integrator,
+            "execute",
+            lambda context: AgentStepResult(
+                True,
+                data={
+                    "manifest": [],
+                    "markdown_refs": "",
+                    "figure_descriptions": "",
+                    "manifest_path": "",
+                    "figure_count": len(context["rendered"]),
+                },
+            ),
+        )
+
+        plan = orch.orchestrate(
+            {
+                "experiment_results": {},
+                "condition_summaries": {},
+                "metrics_summary": {},
+                "metric_key": "primary_metric",
+                "conditions": [],
+                "topic": "test",
+                "output_dir": str(tmp_path / "charts"),
+            }
+        )
+
+        assert plan.figure_count == 1
+        assert plan.passed_count == 0
+
 
 # =========================================================================
 # Config tests

@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import shutil
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,109 +19,6 @@ from researchclaw.config import (
     resolve_config_path,
 )
 from researchclaw.health import print_doctor_report, run_doctor, write_doctor_report
-
-
-# ---------------------------------------------------------------------------
-# OpenCode installation helpers
-# ---------------------------------------------------------------------------
-
-def _is_opencode_installed() -> bool:
-    """Check if the ``opencode`` CLI is available on PATH."""
-    opencode_cmd = shutil.which("opencode")
-    if opencode_cmd is None:
-        return False
-    try:
-        r = subprocess.run(
-            [opencode_cmd, "--version"],
-            capture_output=True, text=True, timeout=15,
-        )
-        return r.returncode == 0
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _is_npm_installed() -> bool:
-    """Check if ``npm`` is available on PATH."""
-    return shutil.which("npm") is not None
-
-
-def _install_opencode() -> bool:
-    """Install OpenCode globally via npm.  Returns True on success."""
-    print("  Installing opencode-ai (this may take a minute)...")
-    npm_cmd = shutil.which("npm")
-    if not npm_cmd:
-        print("  npm is not installed. Cannot install OpenCode.")
-        return False
-    try:
-        r = subprocess.run(
-            [npm_cmd, "i", "-g", "opencode-ai@latest"],
-            capture_output=True, text=True, timeout=120,
-        )
-        if r.returncode == 0:
-            print("  OpenCode installed successfully!")
-            return True
-        else:
-            print(f"  Installation failed (exit {r.returncode}):")
-            if r.stderr:
-                for line in r.stderr.strip().splitlines()[:5]:
-                    print(f"    {line}")
-            return False
-    except subprocess.TimeoutExpired:
-        print("  Installation timed out.")
-        return False
-    except Exception as exc:  # noqa: BLE001
-        print(f"  Installation failed: {exc}")
-        return False
-
-
-def _prompt_opencode_install() -> bool:
-    """Interactively prompt the user to install OpenCode.
-
-    Returns True if OpenCode is now available (already installed or
-    just installed successfully).  Returns False otherwise.
-    """
-    if _is_opencode_installed():
-        return True
-
-    if not sys.stdin.isatty():
-        return False
-
-    print()
-    print("=" * 60)
-    print("  OpenCode Beast Mode  (Recommended)")
-    print("=" * 60)
-    print()
-    print("  OpenCode is an AI coding agent that dramatically improves")
-    print("  experiment code generation for complex research tasks.")
-    print()
-    print("  With OpenCode enabled, ResearchClaw can generate multi-file")
-    print("  experiment projects with custom architectures, training")
-    print("  loops, and ablation studies — far beyond single-file limits.")
-    print()
-
-    if not _is_npm_installed():
-        print("  Node.js/npm is required but not installed.")
-        print("  To install OpenCode later:")
-        print("    1. Install Node.js: https://nodejs.org/")
-        print("    2. Run: npm i -g opencode-ai@latest")
-        print("    — or: researchclaw setup")
-        print()
-        return False
-
-    try:
-        answer = input("  Install OpenCode now? [Y/n]: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return False
-
-    if answer in ("", "y", "yes"):
-        success = _install_opencode()
-        if not success:
-            print("  You can retry later with: researchclaw setup")
-        return success
-    else:
-        print("  Skipped. You can install later with: researchclaw setup")
-        return False
 
 
 def _resolve_config_or_exit(args: argparse.Namespace) -> Path | None:
@@ -244,7 +140,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         kb_root_path = Path(config.knowledge_base.root)
         kb_root_path.mkdir(parents=True, exist_ok=True)
 
-    adapters = AdapterBundle()
+    adapters = AdapterBundle.from_config(config)
 
     from researchclaw.pipeline.runner import execute_pipeline, read_checkpoint
     from researchclaw.pipeline.stages import Stage
@@ -275,14 +171,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"  Output:  {run_dir}")
     print(f"  Mode:    {config.project.mode}")
     print(f"  From:    Stage {int(from_stage)}: {from_stage.name}")
-
-    # Hint: OpenCode beast mode
-    exp_cfg = getattr(config, "experiment", None)
-    oc_cfg = getattr(exp_cfg, "opencode", None)
-    if oc_cfg and getattr(oc_cfg, "enabled", False) and not _is_opencode_installed():
-        print()
-        print("  Hint: OpenCode beast mode is enabled but not installed.")
-        print("        Run 'researchclaw setup' to install for better code generation.")
 
     print()
 
@@ -652,9 +540,6 @@ def cmd_init(args: argparse.Namespace) -> int:
         print("  2. Edit config.arc.yaml to customize your settings")
         print("  3. Run: researchclaw doctor")
 
-    # Offer OpenCode installation
-    _prompt_opencode_install()
-
     return 0
 
 
@@ -662,26 +547,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     """Post-install setup — check and install optional tools."""
     print("ResearchClaw — Environment Setup\n")
 
-    # 1. OpenCode
-    if _is_opencode_installed():
-        try:
-            opencode_cmd = shutil.which("opencode") or "opencode"
-            r = subprocess.run(
-                [opencode_cmd, "--version"],
-                capture_output=True, text=True, timeout=15,
-            )
-            ver = r.stdout.strip() or "unknown"
-        except Exception:  # noqa: BLE001
-            ver = "unknown"
-        print(f"  [OK] OpenCode is installed (version: {ver})")
-    else:
-        installed = _prompt_opencode_install()
-        if installed:
-            print("  [OK] OpenCode is now available")
-        else:
-            print("  [--] OpenCode not installed (beast mode will be unavailable)")
-
-    # 2. Docker (informational)
+    # 1. Docker (informational)
     print()
     if shutil.which("docker"):
         print("  [OK] Docker is available (sandbox execution enabled)")
@@ -690,7 +556,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print("       Install: https://docs.docker.com/get-docker/")
 
     # 3. LaTeX (informational)
-    if shutil.which("pdflatex"):
+    if shutil.which("pdflatex") or shutil.which("tectonic"):
         print("  [OK] LaTeX is available (PDF paper compilation enabled)")
     else:
         print("  [--] LaTeX not found (paper will be exported as .tex only)")
@@ -853,7 +719,7 @@ def main(argv: list[str] | None = None) -> int:
         "--force", action="store_true", help="Overwrite existing config.arc.yaml"
     )
 
-    _ = sub.add_parser("setup", help="Check and install optional tools (OpenCode, etc.)")
+    _ = sub.add_parser("setup", help="Check optional local tools")
 
     rpt_p = sub.add_parser("report", help="Generate human-readable run report")
     _ = rpt_p.add_argument(

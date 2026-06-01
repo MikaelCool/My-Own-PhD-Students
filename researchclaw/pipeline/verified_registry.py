@@ -197,11 +197,15 @@ class VerifiedRegistry:
                     reg.add_value(v, f"metrics_summary.{key}.{stat_name}")
 
         # --- 4. Extract primary_metric ---
-        pm = _extract_primary_metric(metrics)
+        condition_pm = _extract_condition_primary_metric(
+            experiment_summary,
+            metric_direction=metric_direction,
+        )
+        pm = condition_pm[0] if condition_pm is not None else _extract_primary_metric(metrics)
         if pm is not None:
             reg.primary_metric = pm
             reg.add_value(pm, "primary_metric")
-        pm_std = metrics.get("primary_metric_std")
+        pm_std = condition_pm[1] if condition_pm is not None else metrics.get("primary_metric_std")
         if isinstance(pm_std, (int, float)) and _is_finite(pm_std):
             reg.primary_metric_std = pm_std
             reg.add_value(pm_std, "primary_metric_std")
@@ -438,6 +442,50 @@ def _extract_primary_metric(metrics: dict) -> float | None:
     if isinstance(pm, (int, float)) and _is_finite(pm):
         return float(pm)
     return None
+
+
+def _extract_condition_primary_metric(
+    experiment_summary: dict,
+    *,
+    metric_direction: str,
+) -> tuple[float, float | None] | None:
+    """Extract best condition-level primary metric from condition summaries."""
+    condition_summaries = experiment_summary.get("condition_summaries", {})
+    if not isinstance(condition_summaries, dict):
+        return None
+
+    candidates: list[tuple[float, float | None]] = []
+    for cond_data in condition_summaries.values():
+        if not isinstance(cond_data, dict):
+            continue
+        metrics = cond_data.get("metrics", {})
+        if not isinstance(metrics, dict):
+            continue
+        value = None
+        for key in ("primary_metric_mean", "primary_metric"):
+            raw = metrics.get(key)
+            if isinstance(raw, dict):
+                raw = raw.get("mean")
+            try:
+                if raw is not None:
+                    value = float(raw)
+                    break
+            except (TypeError, ValueError):
+                continue
+        if value is None or not _is_finite(value):
+            continue
+        std = metrics.get("primary_metric_std")
+        try:
+            std_value = float(std) if std is not None else None
+        except (TypeError, ValueError):
+            std_value = None
+        candidates.append((value, std_value))
+
+    if not candidates:
+        return None
+    reverse = metric_direction == "maximize"
+    candidates.sort(key=lambda item: item[0], reverse=reverse)
+    return candidates[0]
 
 
 def _is_finite(value: Any) -> bool:

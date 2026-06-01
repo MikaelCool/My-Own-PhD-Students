@@ -280,7 +280,7 @@ class FigureOrchestrator(AgentOrchestrator):
         plan.manifest_path = integrate_result.data.get("manifest_path", "")
         plan.figure_count = integrate_result.data.get("figure_count", 0)
         plan.passed_count = sum(
-            1 for r in all_rendered if r.get("success")
+            1 for r in all_rendered if r.get("success") and r.get("passed_review")
         )
         plan.total_llm_calls = self.total_llm_calls
         plan.total_tokens = self.total_tokens
@@ -338,6 +338,7 @@ class FigureOrchestrator(AgentOrchestrator):
         # Phase 2+3+4: CodeGen → Render → Critic (with retry)
         critic_feedback: list[dict[str, Any]] = []
         final_rendered: list[dict[str, Any]] = []
+        review_pass_by_id: dict[str, bool] = {}
 
         for iteration in range(self.max_iterations):
             self.logger.info(
@@ -411,6 +412,10 @@ class FigureOrchestrator(AgentOrchestrator):
             reviews = critic_result.data.get("reviews", [])
             all_passed = critic_result.data.get("all_passed", False)
             self._save_artifact(f"reviews_{iteration}.json", reviews)
+            for review in reviews:
+                figure_id = str(review.get("figure_id", ""))
+                if figure_id:
+                    review_pass_by_id[figure_id] = bool(review.get("passed"))
 
             if all_passed:
                 self.logger.info(
@@ -439,6 +444,10 @@ class FigureOrchestrator(AgentOrchestrator):
                 "Critic: %d/%d figures need revision",
                 len(failed_ids), len(rendered),
             )
+
+        for rendered in final_rendered:
+            figure_id = str(rendered.get("figure_id", ""))
+            rendered["passed_review"] = bool(review_pass_by_id.get(figure_id, False))
 
         return final_rendered
 

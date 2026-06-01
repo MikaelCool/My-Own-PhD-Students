@@ -4,6 +4,7 @@ from researchclaw.metaclaw_bridge.stage_skill_map import (
     STAGE_SKILL_MAP,
     LESSON_CATEGORY_TO_SKILL_CATEGORY,
     get_stage_config,
+    summarize_stage_policy,
 )
 
 
@@ -44,6 +45,29 @@ def test_get_stage_config_unknown_returns_default():
     cfg = get_stage_config("nonexistent_stage")
     assert cfg["task_type"] == "research"
     assert cfg["top_k"] == 4
+    assert cfg["preferred_categories"] == []
+    assert cfg["bad_combos"] == []
+    assert cfg["good_combos"] == []
+    assert cfg["escalation_rule"] == ""
+    assert cfg["policy_focus"] == ""
+
+
+def test_policy_stage_config_exposes_extended_control_keys():
+    cfg = get_stage_config("code_generation")
+    assert cfg["preferred_categories"] == ["recovery", "control-policy"]
+    assert "prompt-compression+deep-repair" in cfg["bad_combos"]
+    assert "hardware-aware-coding+experiment-debugging" in cfg["good_combos"]
+    assert cfg["escalation_rule"] == "switch_to_block_level_repair_on_large_file_failures"
+    assert "local block repair" in cfg["policy_focus"]
+
+
+def test_summarize_stage_policy_renders_focus_combos_and_escalation():
+    text = summarize_stage_policy("quality_gate")
+    assert "## Stage Skill Policy" in text
+    assert "Focus: treat low-quality acceptance as rollback, not pass-through" in text
+    assert "Preferred categories: writing-governance, evidence-quality" in text
+    assert "Good combos: peer-review-methodology+statistical-analysis" in text
+    assert "Escalation: rollback_to_stage_16_or_14_when_quality_gate_fails" in text
 
 
 def test_lesson_category_mapping_complete():

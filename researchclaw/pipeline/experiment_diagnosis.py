@@ -5,7 +5,7 @@ to produce a structured failure diagnosis with root cause classification
 and concrete repair instructions.
 
 Used by the experiment repair loop (``experiment_repair.py``) to generate
-targeted fixes via OpenCode.
+targeted fixes via the configured coding LLM.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ class ExperimentDiagnosis:
         return any(d.severity == "critical" for d in self.deficiencies)
 
     def to_repair_prompt(self) -> str:
-        """Generate a structured repair prompt for OpenCode."""
+        """Generate a structured repair prompt for a coding LLM."""
         lines = ["## EXPERIMENT DIAGNOSIS\n"]
         lines.append(f"Completion rate: {self.completion_rate:.0%} "
                      f"({len(self.conditions_completed)}/{self.total_planned} conditions)\n")

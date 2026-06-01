@@ -94,6 +94,7 @@ class TestCodeAgentConfig:
         assert cfg.enabled is True
         assert cfg.architecture_planning is True
         assert cfg.exec_fix_max_iterations == 3
+        assert cfg.exec_fix_timeout_sec == 180
         assert cfg.tree_search_enabled is False
         assert cfg.review_max_rounds == 2
 
@@ -101,11 +102,13 @@ class TestCodeAgentConfig:
         cfg = CodeAgentConfig(
             enabled=False,
             exec_fix_max_iterations=5,
+            exec_fix_timeout_sec=240,
             tree_search_enabled=True,
             tree_search_candidates=5,
         )
         assert cfg.enabled is False
         assert cfg.exec_fix_max_iterations == 5
+        assert cfg.exec_fix_timeout_sec == 240
         assert cfg.tree_search_enabled is True
         assert cfg.tree_search_candidates == 5
 

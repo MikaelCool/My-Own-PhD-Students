@@ -109,6 +109,37 @@ class Skill:
     def version(self) -> str:
         return self.metadata.get("version", "1.0")
 
+    @property
+    def preconditions(self) -> list[str]:
+        raw = self.metadata.get("preconditions", "")
+        return [item.strip() for item in raw.split(";") if item.strip()] if raw else []
+
+    @property
+    def expected_gain(self) -> str:
+        return self.metadata.get("expected-gain", "")
+
+    @property
+    def token_cost_band(self) -> str:
+        return self.metadata.get("token-cost-band", "")
+
+    @property
+    def failure_types_covered(self) -> list[str]:
+        raw = self.metadata.get("failure-types-covered", "")
+        return [item.strip() for item in raw.split(",") if item.strip()] if raw else []
+
+    @property
+    def conflict_skills(self) -> list[str]:
+        raw = self.metadata.get("conflict-skills", "")
+        return [item.strip() for item in raw.split(",") if item.strip()] if raw else []
+
+    @property
+    def escalation_rule(self) -> str:
+        return self.metadata.get("escalation-rule", "")
+
+    @property
+    def control_category(self) -> str:
+        return self.metadata.get("control-category", "")
+
     # ── serialization ────────────────────────────────────────────
 
     def to_dict(self) -> dict[str, Any]:
@@ -125,6 +156,13 @@ class Skill:
             "references": self.references,
             "version": self.version,
             "priority": self.priority,
+            "preconditions": self.preconditions,
+            "expected_gain": self.expected_gain,
+            "token_cost_band": self.token_cost_band,
+            "failure_types_covered": self.failure_types_covered,
+            "conflict_skills": self.conflict_skills,
+            "escalation_rule": self.escalation_rule,
+            "control_category": self.control_category,
         }
 
     @classmethod
@@ -149,6 +187,23 @@ class Skill:
         refs = data.get("references") or []
         if refs:
             meta["references"] = "; ".join(str(r) for r in refs)
+        preconditions = data.get("preconditions") or []
+        if preconditions:
+            meta["preconditions"] = "; ".join(str(item) for item in preconditions)
+        if data.get("expected_gain"):
+            meta["expected-gain"] = str(data["expected_gain"])
+        if data.get("token_cost_band"):
+            meta["token-cost-band"] = str(data["token_cost_band"])
+        failure_types = data.get("failure_types_covered") or []
+        if failure_types:
+            meta["failure-types-covered"] = ",".join(str(item) for item in failure_types)
+        conflict_skills = data.get("conflict_skills") or []
+        if conflict_skills:
+            meta["conflict-skills"] = ",".join(str(item) for item in conflict_skills)
+        if data.get("escalation_rule"):
+            meta["escalation-rule"] = str(data["escalation_rule"])
+        if data.get("control_category"):
+            meta["control-category"] = str(data["control_category"])
         # Merge any explicit metadata from the dict
         if isinstance(data.get("metadata"), dict):
             for k, v in data["metadata"].items():

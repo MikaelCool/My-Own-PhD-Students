@@ -13,9 +13,8 @@
 - `llm.provider: acp`
 - `llm.acp.agent: codex`
 - `experiment.mode: sandbox`
-- `experiment.opencode.enabled: false`
 
-这意味着当前默认不是走 OpenAI API 直连，也不是默认走 OpenCode Beast Mode。
+这意味着当前默认不是走 OpenAI API 直连。
 当前默认路径是：
 
 `ResearchClaw -> ACPClient -> acpx -> codex agent`
@@ -95,25 +94,7 @@ docker image inspect researchclaw/experiment:latest | Out-Null
 
 如果你的机器根本没有 Docker，或者 Docker Desktop 没启动，`docker` 模式一定会失败。当前这台机器上我实际检查到的状态就是 `docker` 命令不可用。
 
-## 4. OpenCode 应该怎么启用
-
-OpenCode 不是默认开启的。要用它，需要先安装：
-
-```powershell
-npm i -g opencode-ai@latest
-```
-
-再在配置里启用：
-
-```yaml
-experiment:
-  opencode:
-    enabled: true
-```
-
-代码里它主要用于复杂代码生成和实验修复，不是整个 23 阶段流程的总控。
-
-## 5. PAPER_OUTLINE 失败怎么定位
+## 4. PAPER_OUTLINE 失败怎么定位
 
 `PAPER_OUTLINE` 不是第一现场。它依赖前面已经产出：
 
@@ -139,7 +120,7 @@ experiment:
 
 - `artifacts/.../<run_id>/pipeline.log`
 
-## 6. 现在怎么查看详细运行过程
+## 5. 现在怎么查看详细运行过程
 
 当前前端不是实时流式 WebSocket 展示，而是每 5 秒轮询一次项目状态。
 
@@ -155,7 +136,7 @@ experiment:
 
 飞书通知只是附加通知渠道，不是唯一观察方式。
 
-## 7. 这次我已经修掉的两个问题
+## 6. 这次我已经修掉的两个问题
 
 ### 7.1 Windows 下 Docker 命令构造会崩
 
@@ -172,7 +153,7 @@ Windows 没这两个函数，所以会在真正启动 Docker 之前就报错。
 `Studio` 会去读 `pipeline.log`，但之前主流程没有可靠地把日志接到这个文件。
 现在已经在 pipeline 启动时把根日志路由到每次运行的 `pipeline.log`。
 
-## 8. 推荐排错顺序
+## 7. 推荐排错顺序
 
 1. 先跑 `doctor`
 2. 再跑 `validate`

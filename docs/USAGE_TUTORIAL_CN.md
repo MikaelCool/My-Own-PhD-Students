@@ -25,7 +25,6 @@
 - Python `3.11+`
 - 建议先创建虚拟环境 `.venv`
 - 如果要跑 `docker` 模式实验，需要 Docker
-- 如果要启用 `OpenCode Beast Mode`，需要 `node` 和 `npm`
 - 如果用 API 模型，需要对应的 API Key
 - 如果用 ACP agent 模式，需要本地可用的 ACP agent
 
@@ -49,7 +48,7 @@ pip install -e .
 
 ## 4. 初始化配置
 
-先执行环境检查和可选工具安装：
+先执行环境检查：
 
 ```powershell
 researchclaw setup

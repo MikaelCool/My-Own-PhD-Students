@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,6 +26,64 @@ from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
 
 logger = logging.getLogger(__name__)
+
+
+def _collect_brief_points(text: str, *, max_items: int = 8) -> list[str]:
+    points: list[str] = []
+    seen: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        normalized = re.sub(r"^#{1,6}\s*", "", line)
+        normalized = re.sub(r"^[-*+]\s+", "", normalized)
+        normalized = re.sub(r"^\d+[.)]\s+", "", normalized)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        if len(normalized) < 24 or len(normalized) > 220:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        points.append(normalized.rstrip("."))
+        if len(points) >= max_items:
+            return points
+    paragraphs = [
+        re.sub(r"\s+", " ", chunk).strip()
+        for chunk in text.split("\n\n")
+        if chunk.strip()
+    ]
+    for paragraph in paragraphs:
+        if len(paragraph) < 24:
+            continue
+        snippet = paragraph[:220].rstrip(".")
+        key = snippet.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        points.append(snippet)
+        if len(points) >= max_items:
+            break
+    return points
+
+
+def _write_brief(stage_dir: Path, filename: str, *, title: str, source_ref: str, text: str) -> str:
+    points = _collect_brief_points(text)
+    lines = [
+        f"# {title}",
+        "",
+        f"- Source artifact: `{source_ref}`",
+        "- Use the source artifact on disk when exact wording or full detail is needed.",
+        "",
+        "## Key Points",
+    ]
+    if points:
+        lines.extend(f"- {point}" for point in points)
+    else:
+        lines.append("- No compact points extracted; consult the source artifact directly.")
+    brief = "\n".join(lines) + "\n"
+    (stage_dir / filename).write_text(brief, encoding="utf-8")
+    return brief
 
 
 def _fallback_problem_anchor(
@@ -137,6 +196,13 @@ Investigate the topic with emphasis on reproducible methods and measurable outco
 {_utcnow_iso()}
 """
     (stage_dir / "goal.md").write_text(goal_md, encoding="utf-8")
+    _write_brief(
+        stage_dir,
+        "goal_brief.md",
+        title="Goal Brief",
+        source_ref="stage-01/goal.md",
+        text=goal_md,
+    )
 
     # --- Hardware detection (GPU / MPS / CPU) ---
     hw = detect_hardware()
@@ -161,8 +227,8 @@ Investigate the topic with emphasis on reproducible methods and measurable outco
     return StageResult(
         stage=Stage.TOPIC_INIT,
         status=StageStatus.DONE,
-        artifacts=("goal.md", "hardware_profile.json"),
-        evidence_refs=("stage-01/goal.md", "stage-01/hardware_profile.json"),
+        artifacts=("goal.md", "goal_brief.md", "hardware_profile.json"),
+        evidence_refs=("stage-01/goal.md", "stage-01/goal_brief.md", "stage-01/hardware_profile.json"),
     )
 
 
@@ -175,7 +241,8 @@ def _execute_problem_decompose(
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
 ) -> StageResult:
-    goal_text = _read_prior_artifact(run_dir, "goal.md") or ""
+    goal_text = _read_prior_artifact(run_dir, "goal_brief.md") or _read_prior_artifact(run_dir, "goal.md") or ""
+    goal_context = f"{goal_text}\n\n[Full artifact: stage-01/goal.md]"
     baseline_briefing = _load_baseline_briefing(config)
     _pm = prompts or PromptManager()
     if llm is not None:
@@ -191,7 +258,7 @@ def _execute_problem_decompose(
             "problem_decompose",
             evolution_overlay=_overlay,
             topic=config.research.topic,
-            goal_text=goal_text,
+            goal_text=goal_context,
             baseline_briefing=baseline_briefing,
         )
         resp = llm.chat(
@@ -226,6 +293,13 @@ Derived from `goal.md` for topic: {config.research.topic}
 {_utcnow_iso()}
 """
     (stage_dir / "problem_tree.md").write_text(body, encoding="utf-8")
+    problem_tree_brief = _write_brief(
+        stage_dir,
+        "problem_tree_brief.md",
+        title="Problem Tree Brief",
+        source_ref="stage-02/problem_tree.md",
+        text=body,
+    )
 
     if llm is not None:
         _anchor_overlay = "\n".join(
@@ -240,8 +314,8 @@ Derived from `goal.md` for topic: {config.research.topic}
             "problem_anchor",
             evolution_overlay=_anchor_overlay,
             topic=config.research.topic,
-            goal_text=goal_text,
-            problem_tree=body,
+            goal_text=goal_context,
+            problem_tree=f"{problem_tree_brief}\n\n[Full artifact: stage-02/problem_tree.md]",
             baseline_briefing=baseline_briefing,
         )
         _anchor_resp = llm.chat(
@@ -257,6 +331,13 @@ Derived from `goal.md` for topic: {config.research.topic}
             baseline_briefing,
         )
     (stage_dir / "problem_anchor.md").write_text(problem_anchor, encoding="utf-8")
+    _write_brief(
+        stage_dir,
+        "problem_anchor_brief.md",
+        title="Problem Anchor Brief",
+        source_ref="stage-02/problem_anchor.md",
+        text=problem_anchor,
+    )
 
     # IMP-35: Topic/title quality pre-evaluation
     # Quick LLM check: is the topic well-scoped for a conference paper?
@@ -301,6 +382,6 @@ Derived from `goal.md` for topic: {config.research.topic}
     return StageResult(
         stage=Stage.PROBLEM_DECOMPOSE,
         status=StageStatus.DONE,
-        artifacts=("problem_tree.md", "problem_anchor.md"),
-        evidence_refs=("stage-02/problem_tree.md", "stage-02/problem_anchor.md"),
+        artifacts=("problem_tree.md", "problem_tree_brief.md", "problem_anchor.md", "problem_anchor_brief.md"),
+        evidence_refs=("stage-02/problem_tree.md", "stage-02/problem_tree_brief.md", "stage-02/problem_anchor.md", "stage-02/problem_anchor_brief.md"),
     )

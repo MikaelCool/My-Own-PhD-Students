@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import urllib.error
 import urllib.request
 from http.client import HTTPMessage
@@ -384,6 +385,7 @@ def test_acp_large_prompt_uses_file_transport_before_cli_limit():
     client = ACPClient(ACPConfig(agent="codex"))
     client._acpx = "acpx"
     client._session_ready = True
+    client._prefer_openclaw_gateway = False
     original_limit = ACPClient._MAX_CLI_PROMPT_BYTES
     ACPClient._MAX_CLI_PROMPT_BYTES = 10
     client._ensure_session = lambda: None  # type: ignore[assignment]
@@ -407,6 +409,7 @@ def test_acp_command_line_too_long_falls_back_to_file_transport():
     client = ACPClient(ACPConfig(agent="codex"))
     client._acpx = "acpx"
     client._session_ready = True
+    client._prefer_openclaw_gateway = False
     client._MAX_CLI_PROMPT_BYTES = 1000  # type: ignore[attr-defined]
     client._ensure_session = lambda: None  # type: ignore[assignment]
 
@@ -431,6 +434,107 @@ def test_acp_windows_cmd_wrapper_uses_lower_inline_limit(monkeypatch: pytest.Mon
     monkeypatch.setattr("researchclaw.llm.acp_client.sys.platform", "win32")
     limit = ACPClient._cli_prompt_limit(r"C:\Users\test\AppData\Roaming\npm\acpx.CMD")
     assert limit == ACPClient._MAX_CMD_WRAPPER_PROMPT_BYTES
+
+
+def test_acp_ensure_session_timeout_marks_named_sessions_unusable(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+
+    client = ACPClient(ACPConfig(agent="codex", cwd="/tmp/rc-test", session_name="researchclaw-codex"))
+    client._acpx = "/usr/bin/acpx"
+
+    def fake_run(*args: Any, **kwargs: Any):
+        raise subprocess.TimeoutExpired(cmd=kwargs.get("args", args[0] if args else "acpx"), timeout=30)
+
+    monkeypatch.setattr("researchclaw.llm.acp_client.subprocess.run", fake_run)
+
+    with pytest.raises(RuntimeError, match="No acpx session found"):
+        client._ensure_session()
+
+    assert client._named_sessions_usable is False
+    assert client._session_ready is False
+
+
+def test_acp_send_prompt_falls_back_to_exec_when_named_session_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+
+    client = ACPClient(ACPConfig(agent="codex", cwd="/tmp/rc-test", session_name="researchclaw-codex"))
+    client._acpx = "/usr/bin/acpx"
+    client._prefer_openclaw_gateway = False
+
+    def fake_run(*args: Any, **kwargs: Any):
+        raise subprocess.TimeoutExpired(cmd=kwargs.get("args", args[0] if args else "acpx"), timeout=30)
+
+    monkeypatch.setattr("researchclaw.llm.acp_client.subprocess.run", fake_run)
+    monkeypatch.setattr(client, "_send_prompt_exec", lambda acpx, prompt: "ok-from-exec")
+
+    result = client._send_prompt("test prompt")
+
+    assert result == "ok-from-exec"
+    assert client._named_sessions_usable is False
+
+
+def test_acp_gateway_disconnect_falls_back_to_named_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import http.client
+
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+
+    client = ACPClient(ACPConfig(agent="codex", cwd="/tmp/rc-test"))
+    client._acpx = "/usr/bin/acpx"
+    client._prefer_openclaw_gateway = True
+    client._session_ready = True
+    monkeypatch.setattr(
+        client,
+        "_load_openclaw_gateway_config",
+        lambda: ("http://127.0.0.1:18789/v1/responses", "token", "stable-user"),
+    )
+    monkeypatch.setattr(
+        "researchclaw.llm.acp_client.urllib.request.urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            http.client.RemoteDisconnected("Remote end closed connection without response")
+        ),
+    )
+    monkeypatch.setattr(client, "_ensure_session", lambda: None)
+    monkeypatch.setattr(client, "_send_prompt_cli", lambda acpx, prompt: "ok-from-named-session")
+
+    result = client._send_prompt("test prompt")
+
+    assert result == "ok-from-named-session"
+
+
+def test_acp_describe_backend_health_prefers_gateway_when_healthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+
+    client = ACPClient(ACPConfig(agent="codex", cwd="/tmp/rc-test"))
+    monkeypatch.setattr(
+        client,
+        "_load_openclaw_gateway_config",
+        lambda: ("http://127.0.0.1:18789/v1/responses", "token", "stable-user"),
+    )
+    monkeypatch.setattr(client, "_probe_gateway_socket", lambda _url: True)
+    monkeypatch.setattr(client, "_resolve_acpx", lambda: "/usr/bin/acpx")
+    monkeypatch.setattr(
+        "researchclaw.llm.acp_client._resolve_agent_binary",
+        lambda _agent: "/usr/bin/codex",
+    )
+
+    snapshot = client.describe_backend_health()
+
+    assert snapshot["selected_backend"] == "openclaw_gateway"
+    assert snapshot["backend_order"][:3] == [
+        "openclaw_gateway",
+        "acp_named_session",
+        "acp_exec",
+    ]
+    assert snapshot["gateway_healthy"] is True
+    assert snapshot["degraded"] is False
 
 
 def test_new_param_models_contains_expected_models():

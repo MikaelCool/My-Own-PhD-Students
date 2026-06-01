@@ -10,6 +10,7 @@ from typing import Any
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
+from researchclaw.experiment.validator import detect_non_code_response
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._domain import _detect_domain, _is_ml_domain
 from researchclaw.pipeline._helpers import (
@@ -36,6 +37,61 @@ from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
 
 logger = logging.getLogger(__name__)
+
+
+def _build_authoritative_experiment_snapshot(
+    summary_payload: dict[str, Any],
+    *,
+    metric_key: str,
+    metric_direction: str,
+) -> str:
+    """Render a deterministic metrics snapshot that outranks prose analysis."""
+    condition_summaries = summary_payload.get("condition_summaries", {})
+    if not isinstance(condition_summaries, dict) or not condition_summaries:
+        return ""
+
+    ranked: list[tuple[str, float, str]] = []
+    preferred_keys = (f"{metric_key}_mean", metric_key)
+    for condition, payload in condition_summaries.items():
+        if not isinstance(payload, dict):
+            continue
+        metrics = payload.get("metrics", {})
+        if not isinstance(metrics, dict):
+            continue
+        selected_key = ""
+        selected_value: float | None = None
+        for key in preferred_keys:
+            raw_value = metrics.get(key)
+            if isinstance(raw_value, dict):
+                raw_value = raw_value.get("mean")
+            try:
+                if raw_value is not None:
+                    selected_value = float(raw_value)
+                    selected_key = key
+                    break
+            except (TypeError, ValueError):
+                continue
+        if selected_value is not None:
+            ranked.append((str(condition), selected_value, selected_key))
+
+    if not ranked:
+        return ""
+
+    reverse = metric_direction == "maximize"
+    ranked.sort(key=lambda item: item[1], reverse=reverse)
+    direction_note = "higher is better" if reverse else "lower is better"
+    lines = [
+        "## Authoritative Structured Experiment Snapshot",
+        "",
+        "- Source of truth: `experiment_summary.json`.",
+        f"- Metric direction: `{metric_direction}` ({direction_note}).",
+        "- If prose analysis conflicts with this snapshot, trust this snapshot.",
+        "",
+        f"### Ranked Conditions by `{metric_key}`",
+    ]
+    for idx, (condition, value, selected_key) in enumerate(ranked, start=1):
+        lines.append(f"{idx}. {condition}: {selected_key}={value:.6f}")
+    return "\n".join(lines)
 
 
 def _build_experiment_log(
@@ -175,6 +231,38 @@ def _parse_claim_sections(text: str) -> dict[str, Any]:
             sections[current].append(line[2:].strip())
     sections["generated"] = _utcnow_iso()
     return sections
+
+
+def _build_claim_pruning_md(claims_payload: dict[str, Any]) -> str:
+    supported = claims_payload.get("supported_claims", [])
+    partial = claims_payload.get("partial_claims", [])
+    unsupported = claims_payload.get("unsupported_claims", [])
+    missing = claims_payload.get("missing_evidence", [])
+    lines = [
+        "# Claim Pruning",
+        "",
+        "## Keep",
+    ]
+    if isinstance(supported, list) and supported:
+        lines.extend(f"- {item}" for item in supported)
+    else:
+        lines.append("- No claim is strong enough to keep unqualified.")
+    lines.extend(["", "## Narrow",])
+    if isinstance(partial, list) and partial:
+        lines.extend(f"- {item}" for item in partial)
+    else:
+        lines.append("- None.")
+    lines.extend(["", "## Remove",])
+    if isinstance(unsupported, list) and unsupported:
+        lines.extend(f"- {item}" for item in unsupported)
+    else:
+        lines.append("- None.")
+    lines.extend(["", "## Missing Evidence Before Reinstating Claims"])
+    if isinstance(missing, list) and missing:
+        lines.extend(f"- {item}" for item in missing)
+    else:
+        lines.append("- None.")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _execute_result_analysis(
@@ -673,6 +761,11 @@ def _execute_result_analysis(
         summary_payload["total_conditions"] = _total_conditions
     if _total_metrics:
         summary_payload["total_metric_keys"] = _total_metrics
+    authoritative_snapshot = _build_authoritative_experiment_snapshot(
+        summary_payload,
+        metric_key=config.experiment.metric_key,
+        metric_direction=config.experiment.metric_direction,
+    )
     (stage_dir / "experiment_summary.json").write_text(
         json.dumps(summary_payload, indent=2, default=str), encoding="utf-8"
     )
@@ -777,6 +870,8 @@ def _execute_result_analysis(
 
 Generated: {_utcnow_iso()}
 """
+    if authoritative_snapshot:
+        analysis = authoritative_snapshot + "\n\n" + analysis
     (stage_dir / "analysis.md").write_text(analysis, encoding="utf-8")
 
     artifacts = ["analysis.md", "experiment_summary.json", "experiment_log.md"]
@@ -887,7 +982,7 @@ Generated: {_utcnow_iso()}
     )
 
 
-def _parse_decision(text: str) -> str:
+def _parse_decision(text: str) -> str | None:
     """Extract PROCEED/PIVOT/REFINE from decision text.
 
     Looks for the first standalone keyword on its own line after a
@@ -895,7 +990,7 @@ def _parse_decision(text: str) -> str:
     few lines after the heading, but only matches the keyword itself
     (not mentions inside explanatory prose like "PIVOT is not warranted").
     Returns lowercase ``"proceed"`` / ``"pivot"`` / ``"refine"``.
-    Defaults to ``"proceed"`` if nothing matches.
+    Returns ``None`` if no explicit decision can be found.
     """
     import re as _re
 
@@ -937,7 +1032,7 @@ def _parse_decision(text: str) -> str:
         return "refine"
     if last_pivot >= 0 and (last_refine < 0 or last_pivot > last_refine):
         return "pivot"
-    return "proceed"
+    return None
 
 
 def _execute_research_decision(
@@ -954,6 +1049,28 @@ def _execute_research_decision(
     problem_anchor = _read_prior_artifact(run_dir, "problem_anchor.md") or ""
     claims_evidence_matrix = _read_prior_artifact(run_dir, "claims_evidence_matrix.md") or ""
     experiment_summary = _read_prior_artifact(run_dir, "experiment_summary.json") or ""
+    authoritative_snapshot = ""
+    if experiment_summary:
+        try:
+            summary_payload = json.loads(experiment_summary)
+            if isinstance(summary_payload, dict):
+                authoritative_snapshot = _build_authoritative_experiment_snapshot(
+                    summary_payload,
+                    metric_key=config.experiment.metric_key,
+                    metric_direction=config.experiment.metric_direction,
+                )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            authoritative_snapshot = ""
+    authoritative_analysis = (
+        authoritative_snapshot + "\n\n" + analysis if authoritative_snapshot else analysis
+    )
+    experiment_summary_for_prompt = experiment_summary
+    if authoritative_snapshot:
+        experiment_summary_for_prompt = (
+            authoritative_snapshot
+            + "\n\nRaw `experiment_summary.json` follows:\n"
+            + experiment_summary
+        )
     _pm = prompts or PromptManager()
 
     if llm is not None:
@@ -967,7 +1084,13 @@ def _execute_research_decision(
             + build_stage_skill_overlay(
                 config,
                 stage_name="research_decision",
-                context="\n\n".join((analysis[:2500], experiment_summary[:2500], hypotheses[:1200])),
+                context="\n\n".join(
+                    (
+                        authoritative_analysis[:2500],
+                        experiment_summary_for_prompt[:2500],
+                        hypotheses[:1200],
+                    )
+                ),
             )
         )
         _claim_prompt = _pm.for_stage(
@@ -977,16 +1100,26 @@ def _execute_research_decision(
             problem_anchor=problem_anchor,
             hypotheses=hypotheses,
             claims_evidence_matrix=claims_evidence_matrix,
-            experiment_summary=experiment_summary[:6000],
-            analysis=analysis,
+            experiment_summary=experiment_summary_for_prompt[:6000],
+            analysis=authoritative_analysis,
             baseline_briefing=_load_baseline_briefing(config),
         )
-        _claim_resp = _chat_with_prompt(
-            llm,
-            _claim_prompt.system,
-            _claim_prompt.user,
-            max_tokens=_claim_prompt.max_tokens,
-        )
+        try:
+            _claim_resp = _chat_with_prompt(
+                llm,
+                _claim_prompt.system,
+                _claim_prompt.user,
+                max_tokens=_claim_prompt.max_tokens,
+            )
+        except RuntimeError as exc:
+            logger.error("Claims extraction rejected invalid upstream response: %s", exc)
+            return StageResult(
+                stage=Stage.RESEARCH_DECISION,
+                status=StageStatus.FAILED,
+                artifacts=(),
+                error=str(exc),
+                decision="hold",
+            )
         claims_from_results = _claim_resp.content
         claims_payload = _parse_claim_sections(claims_from_results)
     else:
@@ -1003,6 +1136,10 @@ def _execute_research_decision(
     )
     (stage_dir / "claims_from_results.json").write_text(
         json.dumps(claims_payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (stage_dir / "claim_pruning.md").write_text(
+        _build_claim_pruning_md(claims_payload),
         encoding="utf-8",
     )
 
@@ -1100,17 +1237,33 @@ def _execute_research_decision(
             + build_stage_skill_overlay(
                 config,
                 stage_name="research_decision",
-                context="\n\n".join((claims_from_results[:2000], analysis[:2000])),
+                context="\n\n".join(
+                    (claims_from_results[:2000], authoritative_analysis[:2000])
+                ),
             )
         )
         sp = _pm.for_stage(
             "research_decision",
             evolution_overlay=_overlay,
-            analysis=analysis,
+            analysis=authoritative_analysis,
             claims_from_results=claims_from_results,
         )
         _user = sp.user + _degenerate_hint + _diagnosis_hint + _ablation_refine_hint
-        resp = _chat_with_prompt(llm, sp.system, _user)
+        try:
+            resp = _chat_with_prompt(llm, sp.system, _user)
+        except RuntimeError as exc:
+            logger.error("Research decision rejected invalid upstream response: %s", exc)
+            return StageResult(
+                stage=Stage.RESEARCH_DECISION,
+                status=StageStatus.FAILED,
+                artifacts=(
+                    "claims_from_results.md",
+                    "claims_from_results.json",
+                    "claim_pruning.md",
+                ),
+                error=str(exc),
+                decision="hold",
+            )
         decision_md = resp.content
     else:
         decision_md = f"""# Research Decision
@@ -1131,6 +1284,43 @@ Generated: {_utcnow_iso()}
 
     # --- Extract structured decision ---
     decision = _parse_decision(decision_md)
+    upstream_error = (
+        detect_non_code_response(claims_from_results)
+        or detect_non_code_response(decision_md)
+    )
+    if upstream_error:
+        logger.error(
+            "Research decision rejected invalid upstream response: %s",
+            upstream_error,
+        )
+        return StageResult(
+            stage=Stage.RESEARCH_DECISION,
+            status=StageStatus.FAILED,
+            artifacts=(
+                "decision.md",
+                "claims_from_results.md",
+                "claims_from_results.json",
+                "claim_pruning.md",
+            ),
+            error=upstream_error,
+            decision="hold",
+            evidence_refs=("stage-15/decision.md",),
+        )
+    if decision is None:
+        logger.error("Research decision text did not contain an explicit decision")
+        return StageResult(
+            stage=Stage.RESEARCH_DECISION,
+            status=StageStatus.FAILED,
+            artifacts=(
+                "decision.md",
+                "claims_from_results.md",
+                "claims_from_results.json",
+                "claim_pruning.md",
+            ),
+            error="Decision text did not contain an explicit PROCEED/PIVOT/REFINE verdict.",
+            decision="hold",
+            evidence_refs=("stage-15/decision.md",),
+        )
 
     # T3.1: Validate decision quality — check for minimum experiment rigor
     _quality_warnings: list[str] = []
@@ -1145,6 +1335,7 @@ Generated: {_utcnow_iso()}
         logger.warning("T3.1: Decision quality warnings: %s", _quality_warnings)
 
     decision_payload = {
+        "schema_version": 1,
         "decision": decision,
         "raw_text_excerpt": decision_md[:500],
         "quality_warnings": _quality_warnings,
@@ -1172,6 +1363,7 @@ Generated: {_utcnow_iso()}
             "decision_structured.json",
             "claims_from_results.md",
             "claims_from_results.json",
+            "claim_pruning.md",
             "phase2_handoff.md",
         ),
         evidence_refs=("stage-15/decision.md",),

@@ -52,6 +52,32 @@ from researchclaw.prompts import PromptManager
 logger = logging.getLogger(__name__)
 
 
+def _clip_revision_context(text: str, *, max_chars: int, label: str) -> str:
+    """Bound revision prompts while preserving both opening setup and final evidence."""
+    if len(text) <= max_chars:
+        return text
+    if max_chars < 400:
+        return text[:max_chars].rstrip() + f"\n... [{label} truncated]\n"
+    head_len = int(max_chars * 0.62)
+    tail_len = max_chars - head_len
+    return (
+        text[:head_len].rstrip()
+        + f"\n\n... [{label} compacted: omitted {len(text) - max_chars} middle chars; "
+        "use referenced source artifacts on disk for full detail] ...\n\n"
+        + text[-tail_len:].lstrip()
+    )
+
+
+def _is_context_overflow_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "context" in msg and ("overflow" in msg or "length" in msg or "too long" in msg)
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "quota" in msg or "usage limit" in msg or "rate limit" in msg
+
+
 # ---------------------------------------------------------------------------
 # Helpers imported from executor.py (not yet moved to _helpers.py).
 # Lazy-imported inside functions to avoid circular import when executor.py
@@ -774,6 +800,53 @@ def _execute_paper_revision(
             venue_rubric=format_venue_rubric(venue_profile),
             **_rev_blocks,
         )
+        compact_review_loop_context = _clip_revision_context(
+            review_loop_context,
+            max_chars=6000,
+            label="review loop context",
+        )
+        compact_draft = _clip_revision_context(
+            draft,
+            max_chars=30000,
+            label="paper draft",
+        )
+        compact_reviews = _clip_revision_context(
+            _quality_prefix + reviews + data_integrity_revision,
+            max_chars=14000,
+            label="reviews and evidence",
+        )
+        compact_overlay = (
+            _clip_revision_context(_get_evolution_overlay(run_dir, "paper_revision"), max_chars=2000, label="evolution overlay")
+            + "\n"
+            + _build_startup_contract_block(run_dir, stage_name="paper_revision")
+            + "\n"
+            + build_phase_charter("paper_revision", venue_profile)
+            + "\n"
+            + build_stage_skill_overlay(
+                config,
+                stage_name="paper_revision",
+                context="\n\n".join(
+                    (
+                        compact_reviews[:2000],
+                        compact_review_loop_context[:2000],
+                        compact_draft[:2500],
+                    )
+                ),
+            )
+        )
+        compact_sp = _pm.for_stage(
+            "paper_revision",
+            evolution_overlay=compact_overlay,
+            topic_constraint=_pm.block("topic_constraint", topic=config.research.topic),
+            writing_structure=_ws_revision,
+            review_loop_context=compact_review_loop_context,
+            draft=compact_draft,
+            reviews=compact_reviews,
+            target_venue=venue_profile.label,
+            venue_profile="\n".join(f"- {item}" for item in venue_profile.hard_requirements),
+            venue_rubric=format_venue_rubric(venue_profile),
+            **_rev_blocks,
+        )
         # R10-Fix2: Ensure max_tokens is sufficient for full paper revision
         revision_max_tokens = sp.max_tokens
         if revision_max_tokens and draft_word_count > 0:
@@ -788,15 +861,46 @@ def _execute_paper_revision(
                 )
 
         # R10-Fix4: Retry on timeout for paper revision (critical stage)
-        resp = _chat_with_prompt(
-            llm,
-            sp.system,
-            sp.user,
-            json_mode=sp.json_mode,
-            max_tokens=revision_max_tokens,
-            retries=2,
-        )
-        revised = resp.content
+        try:
+            resp = _chat_with_prompt(
+                llm,
+                sp.system,
+                sp.user,
+                json_mode=sp.json_mode,
+                max_tokens=revision_max_tokens,
+                retries=2,
+            )
+            revised = resp.content
+        except Exception as exc:  # noqa: BLE001
+            if not _is_context_overflow_error(exc):
+                raise
+            logger.warning(
+                "Stage 19: Paper revision hit context overflow; retrying with compact revision context"
+            )
+            try:
+                resp = _chat_with_prompt(
+                    llm,
+                    compact_sp.system,
+                    compact_sp.user,
+                    json_mode=compact_sp.json_mode,
+                    max_tokens=revision_max_tokens,
+                    retries=2,
+                )
+                revised = resp.content
+            except Exception as compact_exc:  # noqa: BLE001
+                if not _is_context_overflow_error(compact_exc):
+                    raise
+                logger.error(
+                    "Stage 19: Compact revision also hit context overflow; "
+                    "preserving original draft and recording internal revision note"
+                )
+                (stage_dir / "revision_notes_internal.md").write_text(
+                    "Stage 19 revision LLM failed with context overflow even after "
+                    "compact retry. The original Stage 17 draft was preserved to "
+                    "avoid content loss or placeholder contamination.\n",
+                    encoding="utf-8",
+                )
+                revised = draft
         revised_word_count = len(revised.split())
         # Length guard: if revision is shorter than 80% of draft, retry once
         if draft_word_count > 500 and revised_word_count < int(draft_word_count * 0.8):
@@ -814,11 +918,31 @@ def _execute_paper_revision(
                 f"If a section has no reviewer comments, include it UNCHANGED.\n\n"
                 + sp.user
             )
-            resp2 = _chat_with_prompt(
-                llm, sp.system, retry_user,
-                json_mode=sp.json_mode, max_tokens=revision_max_tokens,
-            )
-            revised2 = resp2.content
+            try:
+                resp2 = _chat_with_prompt(
+                    llm, sp.system, retry_user,
+                    json_mode=sp.json_mode, max_tokens=revision_max_tokens,
+                )
+                revised2 = resp2.content
+            except Exception as exc:  # noqa: BLE001
+                if not _is_context_overflow_error(exc):
+                    raise
+                compact_retry_user = (
+                    f"CRITICAL LENGTH REQUIREMENT: The draft is {draft_word_count} words. "
+                    f"Your revision MUST preserve the paper's content and avoid summarizing. "
+                    f"Use the compacted draft below as the editable source; if a section is not "
+                    f"present in the compacted view, preserve it conceptually rather than inventing "
+                    f"new claims.\n\n"
+                    + compact_sp.user
+                )
+                resp2 = _chat_with_prompt(
+                    llm,
+                    compact_sp.system,
+                    compact_retry_user,
+                    json_mode=compact_sp.json_mode,
+                    max_tokens=revision_max_tokens,
+                )
+                revised2 = resp2.content
             revised2_word_count = len(revised2.split())
             if revised2_word_count >= int(draft_word_count * 0.8):
                 revised = revised2
@@ -993,7 +1117,16 @@ def _execute_quality_gate(
         _pm = prompts or PromptManager()
         # IMP-33: Evaluate the full paper instead of truncating to 12K chars.
         # Split into chunks if very long, but prefer sending the full text.
-        paper_for_eval = revised[:40000] if len(revised) > 40000 else revised
+        paper_for_eval = _clip_revision_context(
+            revised,
+            max_chars=40000,
+            label="paper for evaluation",
+        )
+        compact_paper_for_eval = _clip_revision_context(
+            revised,
+            max_chars=18000,
+            label="paper for evaluation",
+        )
 
         # BUG-25: Inject experiment status into quality gate prompt
         _exp_context = ""
@@ -1043,14 +1176,80 @@ def _execute_quality_gate(
             venue_profile="\n".join(f"- {item}" for item in venue_profile.hard_requirements),
             venue_rubric=format_venue_rubric(venue_profile),
         )
-        resp = _chat_with_prompt(
-            llm,
-            sp.system,
-            sp.user,
-            json_mode=sp.json_mode,
-            max_tokens=sp.max_tokens,
+        compact_overlay = (
+            _clip_revision_context(_get_evolution_overlay(run_dir, "quality_gate"), max_chars=2000, label="quality overlay")
+            + "\n"
+            + _build_startup_contract_block(run_dir, stage_name="quality_gate")
+            + "\n"
+            + build_phase_charter("quality_gate", venue_profile)
+            + "\n"
+            + build_stage_skill_overlay(
+                config,
+                stage_name="quality_gate",
+                context=compact_paper_for_eval[:3000],
+            )
         )
-        parsed = _safe_json_loads(resp.content, {})
+        compact_sp = _pm.for_stage(
+            "quality_gate",
+            evolution_overlay=compact_overlay,
+            quality_threshold=str(config.research.quality_threshold),
+            revised=compact_paper_for_eval + _exp_context,
+            target_venue=venue_profile.label,
+            venue_profile="\n".join(f"- {item}" for item in venue_profile.hard_requirements),
+            venue_rubric=format_venue_rubric(venue_profile),
+        )
+        try:
+            resp = _chat_with_prompt(
+                llm,
+                sp.system,
+                sp.user,
+                json_mode=sp.json_mode,
+                max_tokens=sp.max_tokens,
+            )
+            parsed = _safe_json_loads(resp.content, {})
+        except Exception as exc:  # noqa: BLE001
+            if _is_quota_error(exc):
+                logger.error(
+                    "Stage 20: Quality gate LLM returned quota/rate-limit error; "
+                    "using conservative default quality report"
+                )
+                parsed = _default_quality_report(config.research.quality_threshold)
+                if isinstance(parsed, dict):
+                    parsed["_assessment_unavailable"] = True
+                    parsed.setdefault("weaknesses", []).append(
+                        "Quality gate LLM returned a quota or rate-limit error; "
+                        "conservative default report used."
+                    )
+            elif not _is_context_overflow_error(exc):
+                raise
+            else:
+                logger.warning(
+                    "Stage 20: Quality gate hit context overflow; retrying with compact paper context"
+                )
+                try:
+                    resp = _chat_with_prompt(
+                        llm,
+                        compact_sp.system,
+                        compact_sp.user,
+                        json_mode=compact_sp.json_mode,
+                        max_tokens=compact_sp.max_tokens,
+                    )
+                    parsed = _safe_json_loads(resp.content, {})
+                except Exception as compact_exc:  # noqa: BLE001
+                    if not (_is_context_overflow_error(compact_exc) or _is_quota_error(compact_exc)):
+                        raise
+                    logger.error(
+                        "Stage 20: Compact quality gate also failed with %s; "
+                        "using conservative default quality report",
+                        compact_exc,
+                    )
+                    parsed = _default_quality_report(config.research.quality_threshold)
+                    if isinstance(parsed, dict):
+                        parsed["_assessment_unavailable"] = True
+                        parsed.setdefault("weaknesses", []).append(
+                            "Quality gate LLM failed after compact retry; "
+                            "conservative default report used."
+                        )
         if isinstance(parsed, dict):
             report = parsed
     # BUG-25: If experiment failed with no metrics, cap the quality score
@@ -1168,8 +1367,11 @@ def _execute_quality_gate(
     review_overall = _coerce_float(review_state.get("overall_score"))
     review_open_findings = int(review_state.get("open_findings", 0) or 0)
     review_outcome = str(review_state.get("review_outcome", "") or "")
+    assessment_unavailable = bool(report.get("_assessment_unavailable"))
 
     if (
+        not assessment_unavailable
+        and
         review_overall is not None
         and (
             review_overall < review_target
@@ -1306,16 +1508,44 @@ def _execute_knowledge_archive(
             preamble=preamble,
             decision=decision,
             analysis=analysis,
-            revised=revised[:15000],
+            revised=_clip_revision_context(revised, max_chars=15000, label="revised paper"),
         )
-        resp = _chat_with_prompt(
-            llm,
-            sp.system,
-            sp.user,
-            json_mode=sp.json_mode,
-            max_tokens=sp.max_tokens,
-        )
-        archive = resp.content
+        try:
+            resp = _chat_with_prompt(
+                llm,
+                sp.system,
+                sp.user,
+                json_mode=sp.json_mode,
+                max_tokens=sp.max_tokens,
+            )
+            archive = resp.content
+        except Exception as exc:  # noqa: BLE001
+            if not (_is_context_overflow_error(exc) or _is_quota_error(exc)):
+                raise
+            logger.error(
+                "Stage 21: Knowledge archive LLM failed with %s; "
+                "writing deterministic archive summary",
+                exc,
+            )
+            archive = f"""# Knowledge Archive
+
+## Lessons Learned
+- Preserve authoritative structured experiment summaries over stale prose.
+- Treat LLM context overflow or quota messages as infrastructure failures, not research decisions.
+- Do not let unavailable paper-quality assessment trigger upstream hypothesis or experiment rollback.
+
+## Reproducibility
+- Run directory: `{run_dir}`
+- Main practical method: `falcon_qb_activation_rank`
+- Condition-level best metric source: `experiment_summary_best.json`
+- Stage 17/19/20 overflow fallbacks were recorded in stage artifacts.
+
+## Future Work
+- Re-run paper-quality assessment when LLM context and quota are stable.
+- Tighten Results/Discussion balance and Conclusion length in a later editorial pass.
+
+Generated: {_utcnow_iso()}
+"""
     else:
         archive = f"""# Knowledge Archive
 
@@ -1356,12 +1586,46 @@ Generated: {_utcnow_iso()}
         if stats:
             for name, stat in sorted(stats.items(), key=lambda item: (-float(item[1]["success_rate"]), item[0]))[:20]:
                 learned_lines.append(
-                    f"- {name}: success_rate={float(stat['success_rate']):.2f}, total={int(stat['total'])}"
+                    "- "
+                    f"{name}: success_rate={float(stat['success_rate']):.2f}, "
+                    f"total={int(stat['total'])}, "
+                    f"avg_wall_time={float(stat.get('avg_wall_time_sec', 0.0)):.2f}s, "
+                    f"avg_quality_gain={float(stat.get('avg_quality_gain', 0.0)):.2f}, "
+                    f"avg_rollback_risk_delta={float(stat.get('avg_rollback_risk_delta', 0.0)):.2f}"
                 )
         else:
             learned_lines.append("- No skill effectiveness records yet.")
     except Exception:
         learned_lines.append("- Skill effectiveness summary unavailable.")
+    learned_lines.extend(["", "## Skill Evolution Loop"])
+    try:
+        evolution_report_path = (
+            Path(getattr(config.metaclaw_bridge, "skills_dir", "~/.metaclaw/skills")).expanduser()
+            / ".evolution"
+            / "skill_evolution_report.json"
+        )
+        if evolution_report_path.exists():
+            report = json.loads(evolution_report_path.read_text(encoding="utf-8"))
+            created = report.get("created_candidates") or []
+            scheduled = report.get("scheduled_trials") or []
+            decisions = report.get("trial_decisions") or {}
+            learned_lines.append(
+                "- "
+                f"created_candidates={len(created) if isinstance(created, list) else 0}, "
+                f"scheduled_trials={len(scheduled) if isinstance(scheduled, list) else 0}, "
+                f"promoted={len(decisions.get('promoted', [])) if isinstance(decisions, dict) else 0}, "
+                f"rejected={len(decisions.get('rejected', [])) if isinstance(decisions, dict) else 0}"
+            )
+            if isinstance(created, list) and created:
+                for item in created[:5]:
+                    if isinstance(item, dict) and item.get("name"):
+                        learned_lines.append(f"- candidate: {item['name']} ({item.get('status', 'candidate')})")
+            if isinstance(scheduled, list) and scheduled:
+                learned_lines.append("- scheduled trial skills: " + ", ".join(str(item) for item in scheduled[:5]))
+        else:
+            learned_lines.append("- Skill evolution report not available yet.")
+    except Exception:
+        learned_lines.append("- Skill evolution summary unavailable.")
     (stage_dir / "learned_skills_summary.md").write_text(
         "\n".join(learned_lines) + "\n",
         encoding="utf-8",
@@ -2110,16 +2374,43 @@ def _execute_export_publish(
     revised = _read_prior_artifact(run_dir, "paper_revised.md") or ""
     if llm is not None:
         _pm = prompts or PromptManager()
-        _overlay = _get_evolution_overlay(run_dir, "export_publish")
-        sp = _pm.for_stage("export_publish", evolution_overlay=_overlay, revised=revised)
-        resp = _chat_with_prompt(
-            llm,
-            sp.system,
-            sp.user,
-            json_mode=sp.json_mode,
-            max_tokens=sp.max_tokens,
+        _overlay = (
+            _get_evolution_overlay(run_dir, "export_publish")
+            + "\n"
+            + _build_startup_contract_block(run_dir, stage_name="export_publish")
+            + "\n"
+            + build_stage_skill_overlay(
+                config,
+                stage_name="export_publish",
+                context=(
+                    revised[:3500]
+                    + "\n\nfinal paper publication formatting citations figures tables captions Nature style"
+                ),
+                max_chars=2600,
+            )
         )
-        final_paper = resp.content
+        sp = _pm.for_stage(
+            "export_publish",
+            evolution_overlay=_overlay,
+            revised=_clip_revision_context(revised, max_chars=24000, label="revised paper"),
+        )
+        try:
+            resp = _chat_with_prompt(
+                llm,
+                sp.system,
+                sp.user,
+                json_mode=sp.json_mode,
+                max_tokens=sp.max_tokens,
+            )
+            final_paper = resp.content
+        except Exception as exc:  # noqa: BLE001
+            if not (_is_context_overflow_error(exc) or _is_quota_error(exc)):
+                raise
+            logger.error(
+                "Stage 22: Export formatting LLM failed with %s; using revised paper directly",
+                exc,
+            )
+            final_paper = revised
         # Content guard: reject LLM output that truncates the paper
         if revised and len(final_paper) < 0.6 * len(revised):
             logger.warning(

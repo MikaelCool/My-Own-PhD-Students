@@ -194,6 +194,33 @@ class TestSkillSchema:
         assert restored.name == sample_skill.name
         assert restored.applicable_stages == sample_skill.applicable_stages
 
+    def test_roundtrip_preserves_control_metadata(self) -> None:
+        skill = Skill.from_dict(
+            {
+                "id": "control-aware-skill",
+                "description": "Handles known runtime failures",
+                "trigger_keywords": ["gpu", "timeout"],
+                "applicable_stages": [10, 12],
+                "preconditions": ["gpu ready", "runtime budget known"],
+                "expected_gain": "higher repair success",
+                "token_cost_band": "medium",
+                "failure_types_covered": ["timeout", "resource_mismatch"],
+                "conflict_skills": ["deep-repair"],
+                "escalation_rule": "switch_to_diagnostics",
+                "control_category": "recovery",
+            }
+        )
+
+        restored = Skill.from_dict(skill.to_dict())
+
+        assert restored.preconditions == ["gpu ready", "runtime budget known"]
+        assert restored.expected_gain == "higher repair success"
+        assert restored.token_cost_band == "medium"
+        assert restored.failure_types_covered == ["timeout", "resource_mismatch"]
+        assert restored.conflict_skills == ["deep-repair"]
+        assert restored.escalation_rule == "switch_to_diagnostics"
+        assert restored.control_category == "recovery"
+
     def test_stage_name_to_number(self) -> None:
         assert STAGE_NAME_TO_NUMBER["code_generation"] == 10
         assert STAGE_NAME_TO_NUMBER["paper_draft"] == 17
@@ -233,6 +260,19 @@ class TestSkillLoader:
         txt.write_text("id: test", encoding="utf-8")
         skill = load_skill_file(txt)
         assert skill is None
+
+    def test_nature_skills_are_available_for_paper_stages(self) -> None:
+        registry = SkillRegistry(custom_dirs=["researchclaw/skills/custom"])
+
+        matched = registry.resolve_bundle(
+            "paper draft abstract introduction results figure caption Nature style",
+            "paper_draft",
+            top_k=4,
+        )
+        names = {skill.name for skill in matched["selected"]}
+
+        assert "nature-polishing" in names
+        assert "nature-figure" in names
 
     def test_load_directory(self, skill_yaml_dir: Path) -> None:
         skills = load_skills_from_directory(skill_yaml_dir)
@@ -317,6 +357,26 @@ class TestSkillMdLoader:
         assert len(matched) == 1
         assert matched[0].source_format == "skillmd"
         assert "From SKILL.md" in matched[0].description
+
+    def test_load_skills_ignores_internal_hidden_dirs(self, tmp_path: Path) -> None:
+        root = tmp_path / "skills"
+        hidden = root / ".candidates" / "shadow-skill"
+        visible = root / "visible-skill"
+        hidden.mkdir(parents=True)
+        visible.mkdir(parents=True)
+        (hidden / "SKILL.md").write_text(
+            "---\nname: shadow-skill\ndescription: hidden\n---\n\nHidden body\n",
+            encoding="utf-8",
+        )
+        (visible / "SKILL.md").write_text(
+            "---\nname: visible-skill\ndescription: visible\n---\n\nVisible body\n",
+            encoding="utf-8",
+        )
+
+        skills = load_skills_from_directory(root)
+        names = {skill.name for skill in skills}
+        assert "visible-skill" in names
+        assert "shadow-skill" not in names
 
 
 # ── Matcher ──────────────────────────────────────────────────────────
@@ -577,3 +637,83 @@ class TestSkillRegistry:
         matched = registry.match("feynrules model generation", stage=10, top_k=10)
         names = [s.name for s in matched]
         assert "hep-feynrules" in names
+
+    def test_resolve_bundle_filters_conflicting_skills(self, tmp_path: Path) -> None:
+        empty = tmp_path / "skills"
+        empty.mkdir()
+        registry = SkillRegistry(builtin_dir=empty)
+        registry.register(
+            Skill.from_dict(
+                {
+                    "id": "hardware-aware-coding",
+                    "description": "Optimize code for GPU experiments",
+                    "trigger_keywords": ["gpu", "cuda", "experiment"],
+                    "applicable_stages": [10],
+                    "priority": 1,
+                    "conflict_skills": ["deep-repair"],
+                    "expected_gain": "stable execution",
+                    "token_cost_band": "low",
+                    "control_category": "recovery",
+                }
+            )
+        )
+        registry.register(
+            Skill.from_dict(
+                {
+                    "id": "deep-repair",
+                    "description": "Large repair pass",
+                    "trigger_keywords": ["gpu", "cuda", "experiment"],
+                    "applicable_stages": [10],
+                    "priority": 2,
+                    "conflict_skills": ["hardware-aware-coding"],
+                }
+            )
+        )
+        registry.register(
+            Skill.from_dict(
+                {
+                    "id": "experiment-debugging",
+                    "description": "Trace runtime mismatch failures",
+                    "trigger_keywords": ["gpu", "cuda", "experiment"],
+                    "applicable_stages": [10],
+                    "priority": 3,
+                }
+            )
+        )
+
+        bundle = registry.resolve_bundle("gpu cuda experiment runtime", stage=10, top_k=2)
+        selected = [skill.name for skill in bundle["selected"]]
+        rejected = {item["skill"]: item["reason"] for item in bundle["rejected"]}
+
+        assert "hardware-aware-coding" in selected
+        assert "experiment-debugging" in selected
+        assert "deep-repair" not in selected
+        assert rejected["deep-repair"] == "conflicts with hardware-aware-coding"
+
+    def test_describe_bundle_includes_policy_rationale(self, tmp_path: Path) -> None:
+        empty = tmp_path / "skills"
+        empty.mkdir()
+        registry = SkillRegistry(builtin_dir=empty)
+        skill = Skill.from_dict(
+            {
+                "id": "experiment-debugging",
+                "description": "Diagnose runtime failures",
+                "expected_gain": "faster diagnosis",
+                "token_cost_band": "medium",
+                "preconditions": ["trace exists"],
+                "escalation_rule": "rollback_to_stage_9",
+                "control_category": "diagnosis",
+            }
+        )
+
+        text = registry.describe_bundle(
+            [skill],
+            rejected=[{"skill": "deep-repair", "reason": "below priority cutoff"}],
+        )
+
+        assert "control=diagnosis" in text
+        assert "gain=faster diagnosis" in text
+        assert "token=medium" in text
+        assert "preconditions=trace exists" in text
+        assert "escalation=rollback_to_stage_9" in text
+        assert "deep-repair: below priority cutoff" in text
