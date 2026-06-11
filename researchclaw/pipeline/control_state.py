@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from researchclaw.config import RCConfig
+from researchclaw.observability.tracing import TraceContext
 from researchclaw.pipeline.stages import ControlAction, Stage, StageStatus
 
 CONTROL_STATE_FILENAME = "run_control_state.json"
@@ -122,6 +123,14 @@ def append_supervisor_event(
     }
     if isinstance(payload, dict):
         event_payload.update(payload)
+    trace = TraceContext.from_dict(event_payload.get("trace") if isinstance(event_payload.get("trace"), dict) else None)
+    if trace is not None:
+        event_payload.setdefault("trace_id", trace.trace_id)
+        event_payload.setdefault("span_id", trace.span_id)
+        event_payload.setdefault("parent_span_id", trace.parent_span_id)
+        event_payload.setdefault("run_id", trace.run_id)
+        if trace.stage is not None:
+            event_payload.setdefault("trace_stage", trace.stage)
     return append_run_index_event(
         run_dir,
         event="supervisor_event",
