@@ -129,7 +129,7 @@ from researchclaw.pipeline.stage_impls._synthesis import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # Stage 9 (extracted to stage_impls/_experiment_design.py)
 # ---------------------------------------------------------------------------
-from researchclaw.pipeline.stage_impls._experiment_design import (  # noqa: E402
+from researchclaw.pipeline.stage_impls._evidence_contracts import (  # noqa: E402
     _execute_experiment_design,
 )
 
@@ -155,6 +155,9 @@ from researchclaw.pipeline.stage_impls._execution import (  # noqa: E402
 from researchclaw.pipeline.stage_impls._analysis import (  # noqa: E402
     _execute_result_analysis,
     _parse_decision,
+)
+from researchclaw.pipeline.stage_impls._evidence_contracts import (  # noqa: E402
+    _build_evidence_ledger_from_claims,
     _execute_research_decision,
 )
 
