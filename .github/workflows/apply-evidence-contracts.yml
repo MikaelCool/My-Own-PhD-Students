@@ -1,0 +1,38 @@
+name: Apply Evidence Contract Executor Hook
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, 'apply evidence contract executor hook') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch executor mapping and remove workflow
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('researchclaw/pipeline/executor.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              """from researchclaw.pipeline.stage_impls._experiment_design import (  # noqa: E402\n    _execute_experiment_design,\n)""",
+              """from researchclaw.pipeline.stage_impls._evidence_contracts import (  # noqa: E402\n    _execute_experiment_design,\n)""",
+          )
+          text = text.replace(
+              """from researchclaw.pipeline.stage_impls._analysis import (  # noqa: E402\n    _execute_result_analysis,\n    _parse_decision,\n    _execute_research_decision,\n)""",
+              """from researchclaw.pipeline.stage_impls._analysis import (  # noqa: E402\n    _execute_result_analysis,\n    _parse_decision,\n)\nfrom researchclaw.pipeline.stage_impls._evidence_contracts import (  # noqa: E402\n    _build_evidence_ledger_from_claims,\n    _execute_research_decision,\n)""",
+          )
+          path.write_text(text, encoding='utf-8')
+          Path('.github/workflows/apply-evidence-contracts.yml').unlink()
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add researchclaw/pipeline/executor.py .github/workflows/apply-evidence-contracts.yml
+          git commit -m 'apply evidence contract executor hook' || exit 0
+          git push

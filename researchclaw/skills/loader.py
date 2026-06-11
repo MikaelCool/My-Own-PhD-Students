@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 import yaml
 
-from researchclaw.skills.schema import Skill
+from researchclaw.skills.schema import ProcedureContract, Skill
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,9 @@ def load_skill_from_skillmd(path: Path) -> Skill | None:
 
     skill_license = str(header.get("license", ""))
     compatibility = str(header.get("compatibility", ""))
+    procedure_contract = None
+    if isinstance(header.get("procedure_contract"), dict):
+        procedure_contract = ProcedureContract.from_dict(header["procedure_contract"])
 
     return Skill(
         name=name,
@@ -92,6 +95,7 @@ def load_skill_from_skillmd(path: Path) -> Skill | None:
         license=skill_license,
         compatibility=compatibility,
         metadata=metadata,
+        procedure_contract=procedure_contract,
         source_dir=path.parent,
         source_format="skillmd",
     )

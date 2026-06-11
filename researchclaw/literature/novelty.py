@@ -24,7 +24,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +190,8 @@ def check_novelty(
     max_search_results: int = 30,
     similarity_threshold: float = 0.25,
     s2_api_key: str = "",
+    inter_query_delay: float = 1.5,
+    search_sources: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Check whether the proposed research has significant overlap with existing work.
 
@@ -208,6 +210,14 @@ def check_novelty(
         Minimum similarity to flag a paper as potentially overlapping.
     s2_api_key:
         Optional Semantic Scholar API key.
+    inter_query_delay:
+        Delay between external search queries. Pipeline tests and local
+        deterministic runs can set this to 0 while user-facing API searches
+        keep the rate-limit-friendly default.
+    search_sources:
+        Optional override for the literature search backends. Passing an empty
+        sequence produces a deterministic no-external-search report while
+        preserving the same scoring and output schema.
 
     Returns
     -------
@@ -229,11 +239,14 @@ def check_novelty(
     try:
         from researchclaw.literature.search import search_papers_multi_query
 
-        found = search_papers_multi_query(
-            queries,
-            limit_per_query=min(15, max_search_results),
-            s2_api_key=s2_api_key,
-        )
+        kwargs: dict[str, Any] = {
+            "limit_per_query": min(15, max_search_results),
+            "s2_api_key": s2_api_key,
+            "inter_query_delay": inter_query_delay,
+        }
+        if search_sources is not None:
+            kwargs["sources"] = tuple(search_sources)
+        found = search_papers_multi_query(queries, **kwargs)
         total_papers_retrieved = len(found)
         for paper in found[:max_search_results]:
             sim = _compute_similarity(hyp_keywords, paper.title, paper.abstract)

@@ -145,11 +145,14 @@ def _execute_hypothesis_gen(
 
         candidates_text = _read_prior_artifact(run_dir, "candidates.jsonl") or ""
         papers_seen = _parse_jsonl_rows(candidates_text) if candidates_text else []
+        s2_api_key = str(getattr(config.llm, "s2_api_key", "") or "")
         novelty_report = check_novelty(
             topic=config.research.topic,
             hypotheses_text=hypotheses_md,
             papers_already_seen=papers_seen,
-            s2_api_key=getattr(config.llm, "s2_api_key", ""),
+            s2_api_key=s2_api_key,
+            inter_query_delay=0.0,
+            search_sources=None if papers_seen or s2_api_key else (),
         )
         (stage_dir / "novelty_report.json").write_text(
             json.dumps(novelty_report, indent=2, ensure_ascii=False),

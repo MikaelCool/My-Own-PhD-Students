@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,59 @@ VALID_CATEGORIES = ("writing", "domain", "experiment", "tooling")
 
 
 @dataclass
+class ProcedureStep:
+    """One executable step in a skill procedure contract."""
+
+    id: str
+    instruction: str
+    verification: str = ""
+    failure_modes: list[str] = field(default_factory=list)
+    expected_output: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ProcedureStep":
+        return cls(
+            id=str(data.get("id") or ""),
+            instruction=str(data.get("instruction") or ""),
+            verification=str(data.get("verification") or ""),
+            failure_modes=[str(item) for item in data.get("failure_modes", []) if str(item)],
+            expected_output=str(data.get("expected_output") or ""),
+        )
+
+
+@dataclass
+class ProcedureContract:
+    """Machine-checkable procedure contract for a skill."""
+
+    contract_id: str
+    version: str = "1.0"
+    inputs: list[str] = field(default_factory=list)
+    outputs: list[str] = field(default_factory=list)
+    steps: list[ProcedureStep] = field(default_factory=list)
+
+    @property
+    def step_ids(self) -> list[str]:
+        return [step.id for step in self.steps]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ProcedureContract":
+        return cls(
+            contract_id=str(data.get("contract_id") or data.get("id") or ""),
+            version=str(data.get("version") or "1.0"),
+            inputs=[str(item) for item in data.get("inputs", []) if str(item)],
+            outputs=[str(item) for item in data.get("outputs", []) if str(item)],
+            steps=[
+                ProcedureStep.from_dict(item)
+                for item in data.get("steps", [])
+                if isinstance(item, dict)
+            ],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class Skill:
     """A single skill definition (agentskills.io compatible).
 
@@ -54,6 +107,7 @@ class Skill:
     license: str = ""
     compatibility: str = ""
     metadata: dict[str, str] = field(default_factory=dict)
+    procedure_contract: ProcedureContract | None = None
 
     # filesystem context
     source_dir: Path | None = None
@@ -144,7 +198,7 @@ class Skill:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary (legacy-compatible output)."""
-        return {
+        payload = {
             "id": self.name,
             "name": self.name,
             "category": self.category,
@@ -164,6 +218,37 @@ class Skill:
             "escalation_rule": self.escalation_rule,
             "control_category": self.control_category,
         }
+        if self.procedure_contract is not None:
+            payload["procedure_contract"] = self.procedure_contract.to_dict()
+        return payload
+
+    def validate_procedure_contract(self) -> list[dict[str, str]]:
+        """Validate whether this skill has a runnable procedure contract."""
+        contract = self.procedure_contract
+        if contract is None:
+            return []
+
+        issues: list[dict[str, str]] = []
+        if not contract.contract_id:
+            issues.append({"severity": "error", "message": "procedure contract_id is missing"})
+        if not contract.outputs:
+            issues.append({"severity": "error", "message": "procedure contract outputs are missing"})
+        if not contract.steps:
+            issues.append({"severity": "error", "message": "procedure contract steps are missing"})
+
+        seen_step_ids: set[str] = set()
+        for idx, step in enumerate(contract.steps, start=1):
+            label = step.id or f"step-{idx}"
+            if not step.id:
+                issues.append({"severity": "error", "message": f"procedure step {idx} id is missing"})
+            elif step.id in seen_step_ids:
+                issues.append({"severity": "error", "message": f"procedure step id is duplicated: {step.id}"})
+            seen_step_ids.add(step.id)
+            if not step.instruction:
+                issues.append({"severity": "error", "message": f"procedure step {label} instruction is missing"})
+            if not step.verification:
+                issues.append({"severity": "error", "message": f"procedure step {label} verification is missing"})
+        return issues
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Skill:
@@ -216,10 +301,15 @@ class Skill:
         if raw_id and "-" in raw_id:
             name = raw_id
 
+        procedure_contract = None
+        if isinstance(data.get("procedure_contract"), dict):
+            procedure_contract = ProcedureContract.from_dict(data["procedure_contract"])
+
         return cls(
             name=name,
             description=str(data.get("description", "")),
             body=str(data.get("prompt_template", "")),
             metadata=meta,
+            procedure_contract=procedure_contract,
             source_format="yaml",
         )
