@@ -208,6 +208,8 @@ class ACPClient:
         gateway_config = self._load_openclaw_gateway_config()
         gateway_url = gateway_config[0] if gateway_config else ""
         gateway_healthy = self._probe_gateway_socket(gateway_url) if gateway_url else False
+        if gateway_healthy:
+            self._prefer_openclaw_gateway = True
         acpx = self._resolve_acpx()
         agent_binary = _resolve_agent_binary(self.config.agent)
 
